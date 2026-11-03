@@ -8,10 +8,10 @@ Dự án bài tập lớn môn Lập trình nâng cao.
 
 | STT | Họ và Tên | Mã sinh viên | Vai trò | Nhiệm vụ chính |
 |:---:|:---|:---:|:---:|:---|
-| 1 | **Trần Hữu Mạnh** | 25024231 | Nhóm trưởng | Kiến trúc hệ thống, Quản lý Git & Core Logic |
-| 2 | **Đặng Văn Nhật Nam** | 25020716 | Thành viên | Giao diện UI / Xử lý sự kiện |
-| 3 | **Bùi Tuấn Dũng** | 25020500 | Thành viên | Xử lý dữ liệu / Unit Test |
-| 4 | **Nguyễn Hoàng Việt** | 25020863 | Thành viên | Xử lý dữ liệu / Unit Test |
+| 1 | **Trần Hữu Mạnh** | 25024231 | Nhóm trưởng | Core Architecture & Concurrency Engine |
+| 2 | **Đặng Văn Nhật Nam** | 25020716 | Thành viên |  Client Core & Realtime Live Bidding GUI |
+| 3 | **Bùi Tuấn Dũng** | 25020500 | Thành viên | Data Persistence, Admin GUI & QA / CI-CD |
+| 4 | **Nguyễn Hoàng Việt** | 25020863 | Thành viên | Networking, Protocol & Bidding Algorithms |
 
 ---
 
