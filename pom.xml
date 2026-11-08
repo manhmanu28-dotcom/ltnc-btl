@@ -23,6 +23,13 @@
             <version>3.45.1.0</version>
         </dependency>
 
+        <!-- JSON parser cho giao thức mạng Socket (TV2 dùng) -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version>
+        </dependency>
+
         <!-- JUnit 5 cho phần Unit Test -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
