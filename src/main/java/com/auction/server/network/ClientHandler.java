@@ -6,6 +6,8 @@ import com.auction.server.model.auction.AuctionStatus;
 import com.auction.server.model.auction.AutoBidConfig;
 import com.auction.server.model.auction.BidTransaction;
 import com.auction.server.model.entity.Bidder;
+import com.auction.server.model.item.Item;
+import com.auction.server.model.item.ItemFactory;
 import com.auction.server.network.protocol.ActionType;
 import com.auction.server.network.protocol.JsonProtocolUtil;
 import com.auction.server.network.protocol.SocketRequest;
@@ -20,6 +22,7 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -130,6 +133,7 @@ public class ClientHandler implements Runnable, Closeable {
                         .putData("clientId", clientId);
 
             case LOGIN:
+            case REGISTER:
                 return handleLogin(request);
 
             case LOGOUT:
@@ -152,6 +156,12 @@ public class ClientHandler implements Runnable, Closeable {
 
             case AUTO_BID:
                 return handleAutoBid(request);
+
+            case CREATE_AUCTION:
+                return handleCreateAuction(request);
+
+            case CANCEL_AUCTION:
+                return handleCancelAuction(request);
 
             default:
                 return SocketResponse.error(request, "Chức năng chưa được hỗ trợ: " + action);
@@ -292,6 +302,85 @@ public class ClientHandler implements Runnable, Closeable {
                 .putData("currentHighestBid", auction.getCurrentHighestBid())
                 .putData("currentWinnerId", auction.getCurrentWinnerId())
                 .putData("currentWinnerUsername", auction.getCurrentWinnerUsername());
+    }
+
+    private SocketResponse handleCreateAuction(SocketRequest request) {
+        String sellerId = request.getUserId();
+        if (sellerId == null || sellerId.trim().isEmpty()) {
+            sellerId = request.getPayloadString("sellerId");
+        }
+        if (sellerId == null || sellerId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Thiếu mã người bán (sellerId/userId) khi tạo phiên đấu giá!");
+        }
+
+        String categoryStr = request.getPayloadString("category");
+        ItemFactory.ItemType itemType = (categoryStr != null && !categoryStr.isEmpty())
+                ? ItemFactory.ItemType.valueOf(categoryStr.trim().toUpperCase())
+                : ItemFactory.ItemType.ELECTRONICS;
+
+        String itemId = request.getPayloadString("itemId");
+        if (itemId == null || itemId.isEmpty()) {
+            itemId = "ITEM-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        }
+        String title = request.getPayloadString("title");
+        if (title == null || title.isEmpty()) {
+            throw new IllegalArgumentException("Tên sản phẩm đấu giá (title) không được để trống!");
+        }
+        String description = request.getPayloadString("description");
+        if (description == null) {
+            description = "";
+        }
+        double startingPrice = request.getRequiredPayloadDouble("startingPrice");
+        double minIncrement = request.getPayloadDouble("minIncrement", Math.max(10_000.0, startingPrice * 0.05));
+
+        Item item = ItemFactory.createItem(itemType, itemId, title, description, startingPrice, request.getPayload());
+
+        String auctionId = request.getAuctionId();
+        if (auctionId == null || auctionId.trim().isEmpty()) {
+            auctionId = "AUC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        }
+
+        String startTimeStr = request.getPayloadString("startTime");
+        String endTimeStr = request.getPayloadString("endTime");
+        int durationMinutes = request.getPayloadInt("durationMinutes", 60);
+
+        LocalDateTime startTime = (startTimeStr != null && !startTimeStr.isEmpty())
+                ? LocalDateTime.parse(startTimeStr)
+                : LocalDateTime.now().minusSeconds(1);
+        LocalDateTime endTime = (endTimeStr != null && !endTimeStr.isEmpty())
+                ? LocalDateTime.parse(endTimeStr)
+                : startTime.plusMinutes(Math.max(1, durationMinutes));
+
+        Auction auction = new Auction(auctionId.trim(), item, sellerId.trim(), minIncrement, startTime, endTime);
+        boolean startImmediately = !"false".equalsIgnoreCase(request.getPayloadString("startImmediately"));
+        if (startImmediately && !startTime.isAfter(LocalDateTime.now())) {
+            auction.startAuction();
+        }
+
+        auctionManager.registerAuction(auction);
+
+        SocketResponse response = SocketResponse.ok(request, "Tạo phiên đấu giá mới thành công!")
+                .putData("auction", JsonProtocolUtil.toAuctionDto(auction, false));
+
+        // Thông báo cho toàn bộ Client biết có phiên đấu giá mới được mở
+        SocketResponse notifyNewAuction = SocketResponse.broadcast(
+                        ActionType.STATUS_UPDATE,
+                        auction.getId(),
+                        "Phiên đấu giá mới vừa được mở: " + item.getTitle())
+                .putData("eventType", "AUCTION_CREATED")
+                .putData("auction", JsonProtocolUtil.toAuctionDto(auction, false));
+        broadcastManager.broadcastToAll(notifyNewAuction.toJson());
+
+        return response;
+    }
+
+    private SocketResponse handleCancelAuction(SocketRequest request) {
+        String auctionId = requireAuctionId(request);
+        Auction auction = auctionManager.getAuctionOrThrow(auctionId);
+        auction.cancelAuction();
+
+        return SocketResponse.ok(request, "Đã hủy phiên đấu giá [" + auctionId + "] thành công!")
+                .putData("auction", JsonProtocolUtil.toAuctionDto(auction, false));
     }
 
     // =========================================================================
