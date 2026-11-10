@@ -11,6 +11,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -58,7 +59,14 @@ public class AuctionSocketClient implements Closeable {
         if (this.connected.get()) {
             return;
         }
-        this.socket = new Socket(this.host, this.port);
+        Socket newSocket = new Socket();
+        try {
+            newSocket.connect(new InetSocketAddress(this.host, this.port), 5000);
+        } catch (IOException | RuntimeException error) {
+            newSocket.close();
+            throw error;
+        }
+        this.socket = newSocket;
         this.socket.setTcpNoDelay(true);
         this.reader = new BufferedReader(
                 new InputStreamReader(this.socket.getInputStream(), StandardCharsets.UTF_8));
