@@ -6,6 +6,8 @@ import com.auction.server.model.auction.AuctionStatus;
 import com.auction.server.model.auction.AutoBidConfig;
 import com.auction.server.model.auction.BidTransaction;
 import com.auction.server.model.entity.Bidder;
+import com.auction.server.model.entity.User;
+import com.auction.server.service.AuthenticationService;
 import com.auction.server.model.item.Item;
 import com.auction.server.model.item.ItemFactory;
 import com.auction.server.network.protocol.ActionType;
@@ -133,8 +135,10 @@ public class ClientHandler implements Runnable, Closeable {
                         .putData("clientId", clientId);
 
             case LOGIN:
-            case REGISTER:
                 return handleLogin(request);
+
+            case REGISTER:
+                return handleRegister(request);
 
             case LOGOUT:
                 return handleLogout(request);
@@ -173,46 +177,29 @@ public class ClientHandler implements Runnable, Closeable {
     // =========================================================================
 
     private SocketResponse handleLogin(SocketRequest request) {
-        String userId = request.getUserId();
-        if (userId == null || userId.trim().isEmpty()) {
-            userId = request.getPayloadString("userId");
+        this.authenticatedBidder = null;
+        User user = new AuthenticationService().login(request.getPayloadString("username"), passwordOf(request));
+        if (user instanceof Bidder bidder) {
+            this.authenticatedBidder = activeBidders.computeIfAbsent(bidder.getId(), id -> bidder);
         }
-        String username = request.getPayloadString("username");
-        if (username == null || username.isEmpty()) {
-            username = (userId != null && !userId.isEmpty()) ? userId : "bidder_" + clientId;
-        }
-        if (userId == null || userId.trim().isEmpty()) {
-            userId = "USER-" + username.toUpperCase();
-        }
-
-        double balance = request.getPayloadDouble("balance", 100_000_000.0);
-        String email = request.getPayloadString("email");
-        if (email == null || email.isEmpty()) {
-            email = username + "@auction.vnu.edu.vn";
-        }
-
-        final String finalUserId = userId.trim();
-        final String finalUsername = username.trim();
-        final String finalEmail = email.trim();
-
-        Bidder bidder = activeBidders.compute(finalUserId, (id, existing) -> {
-            if (existing != null) {
-                if (request.getPayload().containsKey("balance")) {
-                    existing.setBalance(balance);
-                }
-                return existing;
-            }
-            return new Bidder(finalUserId, finalUsername, "session_hash", finalEmail, balance);
-        });
-
-        this.authenticatedBidder = bidder;
-
-        return SocketResponse.ok(request, "Đăng nhập phiên đấu giá thành công!")
+        return SocketResponse.ok(request, "Đăng nhập thành công!")
                 .putData("clientId", clientId)
-                .putData("userId", bidder.getId())
-                .putData("username", bidder.getUsername())
-                .putData("role", bidder.getRoleName())
-                .putData("balance", bidder.getBalance());
+                .putData("userId", user.getId())
+                .putData("username", user.getUsername())
+                .putData("role", user.getRoleName());
+    }
+
+    private SocketResponse handleRegister(SocketRequest request) {
+        User user = new AuthenticationService().register(request.getPayloadString("username"),
+                passwordOf(request), request.getPayloadString("email"));
+        return SocketResponse.ok(request, "Đăng ký thành công. Bạn có thể đăng nhập ngay.")
+                .putData("userId", user.getId())
+                .putData("username", user.getUsername());
+    }
+
+    private String passwordOf(SocketRequest request) {
+        Object password = request.getPayload().get("password");
+        return password instanceof String value ? value : null;
     }
 
     private SocketResponse handleLogout(SocketRequest request) {
@@ -399,27 +386,14 @@ public class ClientHandler implements Runnable, Closeable {
     }
 
     private Bidder resolveBidder(SocketRequest request) {
-        String reqUserId = request.getUserId();
-        if (reqUserId != null && !reqUserId.trim().isEmpty()) {
-            String trimmedId = reqUserId.trim();
-            String username = request.getPayloadString("username");
-            double balance = request.getPayloadDouble("balance", 100_000_000.0);
-
-            return activeBidders.compute(trimmedId, (id, existing) -> {
-                if (existing != null) {
-                    if (request.getPayload().containsKey("balance")) {
-                        existing.setBalance(balance);
-                    }
-                    return existing;
-                }
-                String finalName = (username != null && !username.isEmpty()) ? username : trimmedId;
-                return new Bidder(trimmedId, finalName, "hash", finalName + "@auction.vnu.edu.vn", balance);
-            });
-        }
         if (this.authenticatedBidder != null) {
+            String requestedId = request.getUserId();
+            if (requestedId != null && !requestedId.equals(this.authenticatedBidder.getId())) {
+                throw new IllegalArgumentException("Tài khoản đặt giá không khớp phiên đăng nhập.");
+            }
             return this.authenticatedBidder;
         }
-        throw new IllegalArgumentException("Vui lòng đăng nhập (LOGIN) hoặc cung cấp 'userId' trước khi đặt giá!");
+        throw new IllegalArgumentException("Vui lòng đăng nhập tài khoản người đấu giá trước khi đặt giá.");
     }
 
     /**

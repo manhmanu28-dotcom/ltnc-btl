@@ -5,9 +5,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
+import java.security.GeneralSecurityException;
 
 /**
- * PasswordUtil: Tiện ích mã hóa mật khẩu an toàn sử dụng thuật toán SHA-256 kèm Salt.
+ * PasswordUtil: Băm mật khẩu mới bằng PBKDF2-HMAC-SHA256 kèm salt ngẫu nhiên.
  * Đáp ứng Yêu cầu 3.1.1 (Mã hóa mật khẩu người dùng trước khi lưu trữ vào Database).
  */
 public final class PasswordUtil {
@@ -29,16 +32,14 @@ public final class PasswordUtil {
     }
 
     /**
-     * Băm mật khẩu kèm Salt: SHA-256(password + salt).
-     * Kết quả trả về định dạng "salt:hash" để thuận tiện lưu trữ và xác thực.
+     * Định dạng: pbkdf2$iterations$salt$hash. Không lưu mật khẩu thô.
      */
     public static String hashPassword(String plainPassword) {
         if (plainPassword == null || plainPassword.isEmpty()) {
             throw new IllegalArgumentException("Mật khẩu không được để trống!");
         }
         String salt = generateSalt();
-        String hash = computeSha256(plainPassword, salt);
-        return salt + ":" + hash;
+        return "pbkdf2$600000$" + salt + "$" + deriveKey(plainPassword, salt, 600000);
     }
 
     /**
@@ -59,6 +60,23 @@ public final class PasswordUtil {
             return false;
         }
 
+        if (storedHash.startsWith("pbkdf2$")) {
+            try {
+                String[] parts = storedHash.split("\\$");
+                if (parts.length != 4) {
+                    return false;
+                }
+                int iterations = Integer.parseInt(parts[1]);
+                if (iterations < 1 || iterations > 1_000_000) {
+                    return false;
+                }
+                return MessageDigest.isEqual(Base64.getDecoder().decode(parts[3]),
+                        Base64.getDecoder().decode(deriveKey(plainPassword, parts[2], iterations)));
+            } catch (IllegalArgumentException error) {
+                return false;
+            }
+        }
+
         // Trường hợp hash theo chuẩn "salt:hash"
         if (storedHash.contains(":")) {
             String[] parts = storedHash.split(":", 2);
@@ -71,8 +89,21 @@ public final class PasswordUtil {
             );
         }
 
-        // Hỗ trợ tương thích ngược nếu mật khẩu lưu dạng thô hoặc hash đơn giản
-        return plainPassword.equals(storedHash);
+        // Không chấp nhận mật khẩu lưu dạng thô.
+        return false;
+    }
+
+    private static String deriveKey(String password, String salt, int iterations) {
+        PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), Base64.getDecoder().decode(salt),
+                iterations, 256);
+        try {
+            byte[] key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+            return Base64.getEncoder().encodeToString(key);
+        } catch (GeneralSecurityException error) {
+            throw new IllegalStateException("Không thể băm mật khẩu.", error);
+        } finally {
+            spec.clearPassword();
+        }
     }
 
     private static String computeSha256(String data, String salt) {

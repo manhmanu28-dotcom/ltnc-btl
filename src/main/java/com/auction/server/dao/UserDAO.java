@@ -41,11 +41,21 @@ public class UserDAO {
      * Lưu thông tin người dùng mới vào Database.
      */
     public boolean save(User user) {
+        return writeUser(user, true);
+    }
+
+    /** Chỉ tạo mới; tên tài khoản trùng sẽ bị từ chối, không ghi đè người dùng cũ. */
+    public boolean create(User user) {
+        return writeUser(user, false);
+    }
+
+    private boolean writeUser(User user, boolean replace) {
         if (user == null) {
             throw new IllegalArgumentException("User không được null!");
         }
 
-        String sql = "INSERT OR REPLACE INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
+        String sql = (replace ? "INSERT OR REPLACE" : "INSERT")
+                + " INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
                 + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
         try (Connection conn = dbConnection.getConnection();

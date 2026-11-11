@@ -15,6 +15,11 @@ out/
 build/
 target/
 
+# Local SQLite account data
+*.db
+*.db-wal
+*.db-shm
+
 # IDE configs
 .idea/
 *.iml
