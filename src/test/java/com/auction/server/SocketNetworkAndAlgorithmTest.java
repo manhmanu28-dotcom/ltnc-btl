@@ -11,6 +11,11 @@ import com.auction.server.network.protocol.ActionType;
 import com.auction.server.network.protocol.SocketRequest;
 import com.auction.server.network.protocol.SocketResponse;
 import com.auction.server.service.AuctionManager;
+import com.auction.server.dao.UserDAO;
+import com.auction.server.database.DBConnection;
+import com.auction.server.model.entity.Bidder;
+import com.auction.server.util.PasswordUtil;
+import java.nio.file.Files;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,7 +47,14 @@ class SocketNetworkAndAlgorithmTest {
     private Auction sampleAuction;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        DBConnection.resetInstance();
+        DBConnection.getInstance("jdbc:sqlite:" + Files.createTempFile("auction-network-test-", ".db"));
+        UserDAO users = new UserDAO();
+        String passwordHash = PasswordUtil.hashPassword("test-password");
+        users.create(new Bidder("BIDDER-VIET", "hoang_viet", passwordHash, "viet@example.com", 100_000_000));
+        users.create(new Bidder("BIDDER-NAM", "nhat_nam", passwordHash, "nam@example.com", 100_000_000));
+        users.create(new Bidder("BIDDER-02", "viet_pro_bidder", passwordHash, "bidder@example.com", 100_000_000));
         auctionManager = AuctionManager.getInstance();
         auctionManager.clearAll();
 
@@ -70,6 +82,7 @@ class SocketNetworkAndAlgorithmTest {
     @AfterEach
     void tearDown() {
         auctionManager.clearAll();
+        DBConnection.resetInstance();
     }
 
     @Test
@@ -116,7 +129,7 @@ class SocketNetworkAndAlgorithmTest {
         // Bước 1: Gửi gói tin LOGIN
         String loginJson = SocketRequest.of(ActionType.LOGIN, "BIDDER-VIET", null)
                 .putPayload("username", "hoang_viet")
-                .putPayload("balance", 100_000_000.0)
+                .putPayload("password", "test-password")
                 .toJson();
         SocketResponse loginResp = handler.processJsonMessage(loginJson);
         assertTrue(loginResp.isSuccess());
@@ -129,6 +142,10 @@ class SocketNetworkAndAlgorithmTest {
         SocketResponse bidResp = handler.processJsonMessage(bidJson);
         assertTrue(bidResp.isSuccess());
         assertEquals(20_000_000.0, sampleAuction.getCurrentHighestBid());
+
+        assertTrue(handler.processJsonMessage(SocketRequest.of(ActionType.LOGIN)
+                .putPayload("username", "nhat_nam")
+                .putPayload("password", "test-password").toJson()).isSuccess());
 
         // Bước 3: Người thứ 2 đặt giá thấp hơn mức tối thiểu -> phải trả về SocketResponse(success=false)
         String invalidBidJson = SocketRequest.of(ActionType.PLACE_BID, "BIDDER-NAM", "AUC-NET-01")
@@ -203,6 +220,11 @@ class SocketNetworkAndAlgorithmTest {
                          new OutputStreamWriter(bidderSocket.getOutputStream(), StandardCharsets.UTF_8), true);
                  BufferedReader in = new BufferedReader(
                          new InputStreamReader(bidderSocket.getInputStream(), StandardCharsets.UTF_8))) {
+
+                out.println(SocketRequest.of(ActionType.LOGIN)
+                        .putPayload("username", "viet_pro_bidder")
+                        .putPayload("password", "test-password").toJson());
+                assertTrue(SocketResponse.fromJson(in.readLine()).isSuccess());
 
                 SocketRequest bidReq = SocketRequest.of(ActionType.PLACE_BID, "BIDDER-02", "AUC-NET-01")
                         .putPayload("username", "viet_pro_bidder")
