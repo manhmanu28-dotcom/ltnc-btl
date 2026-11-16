@@ -199,6 +199,7 @@ public class Auction extends BaseEntity {
      */
     public BidTransaction placeBid(Bidder bidder, double amount, LocalDateTime bidTime) {
         List<BidEventRecord> generatedEvents = new ArrayList<>();
+        AntiSnipingContext antiSnipingContext = new AntiSnipingContext();
         AuctionStatus autoClosedFromStatus = null;
         BidTransaction manualTransaction;
 
@@ -235,10 +236,11 @@ public class Auction extends BaseEntity {
             }
 
             // 5. Ghi nhận giao dịch đặt giá nguyên tử & kiểm tra Anti-sniping
-            manualTransaction = recordBidInternal(bidder, amount, effectiveTime, false, generatedEvents);
+            manualTransaction = recordBidInternal(
+                    bidder, amount, effectiveTime, false, generatedEvents, antiSnipingContext);
 
             // 6. Kích hoạt hệ thống Auto-Bidding (nếu có đối thủ đã đăng ký Auto-Bid)
-            resolveAutoBidsInternal(effectiveTime, generatedEvents);
+            resolveAutoBidsInternal(effectiveTime, generatedEvents, antiSnipingContext);
 
         } finally {
             lock.unlock();
@@ -271,6 +273,7 @@ public class Auction extends BaseEntity {
      */
     public AutoBidConfig registerAutoBid(Bidder bidder, double maxBid, double increment, LocalDateTime registeredAt) {
         List<BidEventRecord> generatedEvents = new ArrayList<>();
+        AntiSnipingContext antiSnipingContext = new AntiSnipingContext();
         AuctionStatus autoClosedFromStatus = null;
         AutoBidConfig config;
 
@@ -314,7 +317,7 @@ public class Auction extends BaseEntity {
             this.autoBidQueue.offer(config);
 
             // Chạy bộ giải quyết tự động so khớp giữa các Auto-Bid và giá hiện tại
-            resolveAutoBidsInternal(effectiveTime, generatedEvents);
+            resolveAutoBidsInternal(effectiveTime, generatedEvents, antiSnipingContext);
 
         } finally {
             lock.unlock();
@@ -336,7 +339,8 @@ public class Auction extends BaseEntity {
      * - Không bao giờ vượt quá maxBid của từng người.
      * - Ưu tiên người đăng ký Auto-Bid sớm hơn nếu hai người có cùng mức maxBid.
      */
-    private void resolveAutoBidsInternal(LocalDateTime eventTime, List<BidEventRecord> generatedEvents) {
+    private void resolveAutoBidsInternal(LocalDateTime eventTime, List<BidEventRecord> generatedEvents,
+                                         AntiSnipingContext antiSnipingContext) {
         // Loại bỏ các Auto-Bid không còn đủ số dư hoặc đã tụt lại phía sau giá hiện tại
         this.autoBidQueue.removeIf(cfg ->
                 cfg.getMaxBid() < this.currentHighestBid || cfg.getBidder().getBalance() < cfg.getMaxBid());
@@ -348,59 +352,42 @@ public class Auction extends BaseEntity {
         List<AutoBidConfig> sortedConfigs = new ArrayList<>(this.autoBidQueue);
         Collections.sort(sortedConfigs);
 
-        AutoBidConfig top1 = sortedConfigs.get(0);
+        AutoBidConfig leader = sortedConfigs.get(0);
+        AutoBidConfig runnerUp = sortedConfigs.size() > 1 ? sortedConfigs.get(1) : null;
 
-        if (sortedConfigs.size() == 1) {
-            // Chỉ có 1 Auto-Bidder khả dụng: nếu họ chưa dẫn đầu và đủ khả năng trả bước giá kế tiếp
-            if (!top1.getBidderId().equals(this.currentWinnerId)) {
-                double requiredMin = getMinimumNextBidInternal();
-                if (top1.getMaxBid() >= requiredMin) {
-                    double nextAmount = (this.currentWinnerId == null)
-                            ? this.item.getStartingPrice()
-                            : Math.min(top1.getMaxBid(), this.currentHighestBid + top1.getIncrement());
-                    if (nextAmount < requiredMin) {
-                        nextAmount = requiredMin;
-                    }
-                    recordBidInternal(top1.getBidder(), nextAmount, eventTime, true, generatedEvents);
-                }
+        // Một proxy bidder chỉ cần đặt vừa đủ để vượt giá hiện tại và giá trần
+        // của đối thủ kế tiếp. maxBid là giới hạn bí mật, không phải mức giá đã trả.
+        double requiredMin = getMinimumNextBidInternal();
+        double step = Math.max(this.minIncrement, leader.getIncrement());
+        double targetAmount;
+
+        if (runnerUp == null) {
+            if (leader.getBidderId().equals(this.currentWinnerId)) {
+                return;
             }
-            return;
-        }
-
-        // Có từ 2 Auto-Bidders trở lên cạnh tranh với nhau (top1 và top2)
-        AutoBidConfig top2 = sortedConfigs.get(1);
-
-        if (top1.getMaxBid() > top2.getMaxBid()) {
-            // Bước 1: Nếu top2 chưa phải người dẫn đầu và maxBid của top2 >= mức tối thiểu tiếp theo,
-            // ghi nhận mức giá trần của top2 vào lịch sử để minh bạch quá trình cạnh tranh.
-            double requiredForTop2 = getMinimumNextBidInternal();
-            if (!top2.getBidderId().equals(this.currentWinnerId) && top2.getMaxBid() >= requiredForTop2) {
-                recordBidInternal(top2.getBidder(), top2.getMaxBid(), eventTime, true, generatedEvents);
-            }
-
-            // Bước 2: top1 tự động vượt lên trên top2 đúng 1 bước giá (hoặc chạm trần top1.maxBid)
-            if (!top1.getBidderId().equals(this.currentWinnerId)) {
-                double targetForTop1 = Math.min(top1.getMaxBid(),
-                        Math.max(getMinimumNextBidInternal(), top2.getMaxBid() + top1.getIncrement()));
-                if (targetForTop1 >= getMinimumNextBidInternal()) {
-                    recordBidInternal(top1.getBidder(), targetForTop1, eventTime, true, generatedEvents);
-                }
-            }
+            targetAmount = this.currentWinnerId == null
+                    ? this.item.getStartingPrice()
+                    : Math.min(leader.getMaxBid(), this.currentHighestBid + step);
         } else {
-            // Trường hợp hòa maxBid (top1.maxBid == top2.maxBid):
-            // Do PriorityQueue đã sắp xếp theo thời điểm đăng ký (registeredAt), top1 là người đăng ký sớm hơn.
-            // Vì vậy top1 được quyền chiếm lĩnh mức giá trần maxBid!
-            if (!top1.getBidderId().equals(this.currentWinnerId) || this.currentHighestBid < top1.getMaxBid()) {
-                if (top1.getMaxBid() >= getMinimumNextBidInternal()) {
-                    recordBidInternal(top1.getBidder(), top1.getMaxBid(), eventTime, true, generatedEvents);
-                }
+            // PriorityQueue phân xử hòa maxBid theo thời điểm đăng ký sớm hơn.
+            // Người đang dẫn đầu chỉ tăng giá khi đối thủ kế tiếp buộc họ phải tăng.
+            targetAmount = runnerUp.getMaxBid() + step;
+            if (!leader.getBidderId().equals(this.currentWinnerId)) {
+                targetAmount = Math.max(targetAmount, this.currentHighestBid + step);
             }
+            targetAmount = Math.min(targetAmount, leader.getMaxBid());
         }
 
-        // Dọn dẹp những cấu hình không thể đặt thêm bước giá tiếp theo
+        if ((targetAmount >= requiredMin && targetAmount > this.currentHighestBid)
+                || (this.currentWinnerId == null && targetAmount >= this.item.getStartingPrice())) {
+            recordBidInternal(leader.getBidder(), targetAmount, eventTime, true,
+                    generatedEvents, antiSnipingContext);
+        }
+
+        // Giữ cấu hình người đang dẫn đầu để họ có thể phản ứng với đối thủ mới.
         double nextMinAfterResolution = getMinimumNextBidInternal();
-        this.autoBidQueue.removeIf(cfg ->
-                !cfg.getBidderId().equals(this.currentWinnerId) && cfg.getMaxBid() < nextMinAfterResolution);
+        this.autoBidQueue.removeIf(cfg -> !cfg.getBidderId().equals(this.currentWinnerId)
+                && cfg.getMaxBid() < nextMinAfterResolution);
     }
 
     // =========================================================================
@@ -432,18 +419,22 @@ public class Auction extends BaseEntity {
     }
 
     private BidTransaction recordBidInternal(Bidder bidder, double amount, LocalDateTime bidTime,
-                                             boolean isAutoBid, List<BidEventRecord> generatedEvents) {
+                                             boolean isAutoBid, List<BidEventRecord> generatedEvents,
+                                             AntiSnipingContext antiSnipingContext) {
         this.currentHighestBid = amount;
         this.currentWinnerId = bidder.getId();
         this.currentWinnerUsername = bidder.getUsername();
 
-        // Thuật toán Anti-sniping (Yêu cầu 3.2.3):
-        // Nếu có bid mới trong X giây cuối -> tự động gia hạn thêm Y giây
+        // Gia hạn tối đa một lần cho mỗi thao tác đặt giá. Một thao tác có thể
+        // sinh nhiều auto-bid cùng timestamp; không cộng Y giây lặp lại cho từng giao dịch.
         boolean timeExtended = false;
-        if (this.antiSnipingTriggerSeconds > 0 && this.antiSnipingExtendSeconds > 0) {
-            long remainingSeconds = Duration.between(bidTime, this.endTime).getSeconds();
-            if (remainingSeconds >= 0 && remainingSeconds <= this.antiSnipingTriggerSeconds) {
+        if (!antiSnipingContext.extended
+                && this.antiSnipingTriggerSeconds > 0 && this.antiSnipingExtendSeconds > 0) {
+            Duration remaining = Duration.between(bidTime, this.endTime);
+            if (!remaining.isNegative()
+                    && remaining.compareTo(Duration.ofSeconds(this.antiSnipingTriggerSeconds)) <= 0) {
                 this.endTime = this.endTime.plusSeconds(this.antiSnipingExtendSeconds);
+                antiSnipingContext.extended = true;
                 timeExtended = true;
             }
         }
@@ -471,6 +462,11 @@ public class Auction extends BaseEntity {
             this.transaction = transaction;
             this.timeExtended = timeExtended;
         }
+    }
+
+    /** Theo dõi trạng thái gia hạn trong một thao tác bid và các auto-bid phát sinh từ nó. */
+    private static final class AntiSnipingContext {
+        private boolean extended;
     }
 
     // =========================================================================
