@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Server', 'Client')]
+    [ValidateSet('Server', 'Client', 'Demo')]
     [string]$Mode = 'Client'
 )
 
@@ -28,5 +28,6 @@ if (Test-Path -LiteralPath 'src/main/resources') {
 }
 
 $mainClass = if ($Mode -eq 'Server') { 'com.auction.server.ServerApplication' } else { 'com.auction.client.ClientApplication' }
-& $javaRuntime --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass
+$appArguments = if ($Mode -eq 'Demo') { @('--demo') } else { @() }
+& $javaRuntime --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass @appArguments
 exit $LASTEXITCODE
