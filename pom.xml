@@ -13,6 +13,7 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.0</junit.version>
+        <!-- Keep JavaFX compatible with the project's JDK 17 target and CI. -->
         <javafx.version>17.0.8</javafx.version>
     </properties>
 
