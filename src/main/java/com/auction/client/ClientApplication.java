@@ -2,6 +2,7 @@ package com.auction.client;
 
 import com.auction.client.controller.AuctionListController;
 import com.auction.client.controller.AuthenticationController;
+import com.auction.client.controller.AuctionDemoController;
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.ui.AuctionTheme;
 import javafx.application.Application;
@@ -20,24 +21,48 @@ public class ClientApplication extends Application {
 
     private AuctionListController controller;
     private AuthenticationController authentication;
+    private AuctionDemoController demo;
     private Stage stage;
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
         stage.setTitle("Auction Client");
-        showLogin();
+        if (getParameters().getRaw().contains("--demo")) {
+            showDemo();
+        } else {
+            showLogin();
+        }
         stage.setMinWidth(760);
         stage.setMinHeight(440);
         stage.show();
     }
 
     private void showLogin() {
-        authentication = new AuthenticationController(this::showAuctions);
+        authentication = new AuthenticationController(this::showAuctions, this::showDemo);
         if (stage.getScene() == null) {
             stage.setScene(new Scene(authentication.getView(), 1280, 860));
         } else {
             stage.getScene().setRoot(authentication.getView());
+        }
+    }
+
+    private void showDemo() {
+        if (authentication != null) {
+            authentication.close();
+            authentication = null;
+        }
+        demo = new AuctionDemoController(() -> {
+            demo.close();
+            demo = null;
+            stage.setTitle("Auction Client");
+            showLogin();
+        });
+        stage.setTitle("Auction Client — Demo phòng đấu giá");
+        if (stage.getScene() == null) {
+            stage.setScene(new Scene(demo.getView(), 1280, 860));
+        } else {
+            stage.getScene().setRoot(demo.getView());
         }
     }
 
@@ -70,6 +95,9 @@ public class ClientApplication extends Application {
 
     @Override
     public void stop() {
+        if (demo != null) {
+            demo.close();
+        }
         if (controller != null) {
             controller.close();
         }

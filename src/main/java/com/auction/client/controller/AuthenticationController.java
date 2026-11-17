@@ -3,6 +3,7 @@ package com.auction.client.controller;
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuthenticationClientService;
 import com.auction.client.ui.AuctionTheme;
+import com.auction.client.ui.PasswordInput;
 import com.auction.server.network.protocol.SocketResponse;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
@@ -43,6 +44,9 @@ public class AuthenticationController implements AutoCloseable {
     private final TextField email = new TextField();
     private final PasswordField registerPassword = new PasswordField();
     private final PasswordField confirmation = new PasswordField();
+    private final PasswordInput loginPasswordInput = new PasswordInput(loginPassword);
+    private final PasswordInput registerPasswordInput = new PasswordInput(registerPassword);
+    private final PasswordInput confirmationInput = new PasswordInput(confirmation);
     private final Label message = new Label();
     private final VBox formHost = new VBox();
     private Consumer<Boolean> showForm;
@@ -58,6 +62,10 @@ public class AuthenticationController implements AutoCloseable {
     private boolean closed;
 
     public AuthenticationController(Consumer<AuthenticatedSession> onLogin) {
+        this(onLogin, null);
+    }
+
+    public AuthenticationController(Consumer<AuthenticatedSession> onLogin, Runnable onDemo) {
         this.onLogin = onLogin;
         Label title = label("Chào mừng trở lại", "card-title");
         Label introduction = label("Đăng nhập để khám phá các phiên đấu giá.", "muted");
@@ -86,7 +94,7 @@ public class AuthenticationController implements AutoCloseable {
         loginName.setPromptText("Nhập tên đăng nhập");
         loginPassword.setPromptText("Nhập mật khẩu của bạn");
         VBox loginForm = new VBox(10, label("Tên đăng nhập", "field-caption"), loginName,
-                label("Mật khẩu", "field-caption"), loginPassword, login);
+                label("Mật khẩu", "field-caption"), loginPasswordInput, login);
         VBox.setMargin(login, new Insets(10, 0, 0, 0));
 
         Button register = new Button("Tạo tài khoản");
@@ -101,8 +109,8 @@ public class AuthenticationController implements AutoCloseable {
         registerPassword.setPromptText("Ít nhất 8 ký tự");
         confirmation.setPromptText("Nhập lại mật khẩu");
         VBox registerForm = new VBox(8, label("Tên đăng nhập", "field-caption"), registerName,
-                label("Email", "field-caption"), email, label("Mật khẩu", "field-caption"), registerPassword,
-                label("Nhập lại mật khẩu", "field-caption"), confirmation, hint, register);
+                label("Email", "field-caption"), email, label("Mật khẩu", "field-caption"), registerPasswordInput,
+                label("Nhập lại mật khẩu", "field-caption"), confirmationInput, hint, register);
         VBox.setMargin(register, new Insets(8, 0, 0, 0));
         Hyperlink createAccount = new Hyperlink("Tạo tài khoản");
         createAccount.setId("auth-create-account-link");
@@ -112,6 +120,13 @@ public class AuthenticationController implements AutoCloseable {
         registrationPrompt.setAlignment(Pos.CENTER);
         VBox.setMargin(registrationPrompt, new Insets(8, 0, 0, 0));
         loginForm.getChildren().add(registrationPrompt);
+        if (onDemo != null) {
+            Button demoButton = new Button("Xem demo phòng đấu giá →");
+            demoButton.getStyleClass().add("secondary-button");
+            demoButton.setMaxWidth(Double.MAX_VALUE);
+            demoButton.setOnAction(event -> onDemo.run());
+            loginForm.getChildren().add(demoButton);
+        }
 
         Hyperlink returnToLogin = new Hyperlink("Đăng nhập");
         returnToLogin.setId("auth-return-login-link");
@@ -304,6 +319,9 @@ public class AuthenticationController implements AutoCloseable {
     }
 
     private void clearPasswords() {
+        loginPasswordInput.conceal();
+        registerPasswordInput.conceal();
+        confirmationInput.conceal();
         loginPassword.clear();
         registerPassword.clear();
         confirmation.clear();
