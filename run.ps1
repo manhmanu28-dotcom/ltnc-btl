@@ -43,5 +43,5 @@ if (Test-Path -LiteralPath 'src/main/resources') {
 
 $mainClass = if ($Mode -eq 'Server') { 'com.auction.server.ServerApplication' } else { 'com.auction.client.ClientApplication' }
 $appArguments = if ($Mode -eq 'Demo') { @('--demo') } else { @() }
-& $javaRuntime --enable-native-access=javafx.graphics --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass @appArguments
+& $javaRuntime --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass @appArguments
 exit $LASTEXITCODE
