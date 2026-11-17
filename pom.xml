@@ -13,7 +13,8 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.0</junit.version>
-        <javafx.version>17.0.8</javafx.version>
+        <!-- JavaFX 27.0.1 supports JDK 25+, including the JDK 26 used locally. -->
+        <javafx.version>27.0.1</javafx.version>
     </properties>
 
     <dependencies>
