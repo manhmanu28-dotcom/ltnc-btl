@@ -11,6 +11,7 @@ import javafx.geometry.Pos;
 import javafx.geometry.VPos;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.PasswordField;
@@ -42,6 +43,7 @@ public class AuthenticationController implements AutoCloseable {
     private final PasswordField loginPassword = new PasswordField();
     private final TextField registerName = new TextField();
     private final TextField email = new TextField();
+    private final ComboBox<String> roleComboBox = new ComboBox<>(); // THÊM MỚI: ComboBox chọn Role
     private final PasswordField registerPassword = new PasswordField();
     private final PasswordField confirmation = new PasswordField();
     private final PasswordInput loginPasswordInput = new PasswordInput(loginPassword);
@@ -106,11 +108,22 @@ public class AuthenticationController implements AutoCloseable {
         hint.setWrapText(true);
         registerName.setPromptText("Ví dụ: nguyen_an");
         email.setPromptText("ban@example.com");
+
+        // THÊM MỚI: Thiết lập thuộc tính cho Role ComboBox
+        roleComboBox.getItems().addAll("BIDDER", "SELLER");
+        roleComboBox.setValue("BIDDER"); // Đặt mặc định là Người mua
+        roleComboBox.setMaxWidth(Double.MAX_VALUE);
+
         registerPassword.setPromptText("Ít nhất 8 ký tự");
         confirmation.setPromptText("Nhập lại mật khẩu");
+
+        // THÊM MỚI: Thêm Role ComboBox vào VBox của RegisterForm
         VBox registerForm = new VBox(8, label("Tên đăng nhập", "field-caption"), registerName,
-                label("Email", "field-caption"), email, label("Mật khẩu", "field-caption"), registerPasswordInput,
+                label("Email", "field-caption"), email,
+                label("Vai trò", "field-caption"), roleComboBox, // Gắn roleComboBox vào đây
+                label("Mật khẩu", "field-caption"), registerPasswordInput,
                 label("Nhập lại mật khẩu", "field-caption"), confirmationInput, hint, register);
+
         VBox.setMargin(register, new Insets(8, 0, 0, 0));
         Hyperlink createAccount = new Hyperlink("Tạo tài khoản");
         createAccount.setId("auth-create-account-link");
@@ -267,6 +280,10 @@ public class AuthenticationController implements AutoCloseable {
         String username = (register ? registerName : loginName).getText().trim();
         String password = (register ? registerPassword : loginPassword).getText();
         String emailAddress = email.getText().trim();
+
+        // THÊM MỚI: Lấy giá trị Vai trò mà người dùng chọn
+        String role = register ? roleComboBox.getValue() : null;
+
         if (username.isEmpty() || password.isEmpty()) {
             message.setText("Vui lòng nhập tên đăng nhập và mật khẩu.");
             return;
@@ -280,7 +297,8 @@ public class AuthenticationController implements AutoCloseable {
         Task<SocketResponse> task = new Task<>() {
             @Override
             protected SocketResponse call() throws Exception {
-                return service.submit(serverHost, serverPort, register, username, password, emailAddress);
+                // CẬP NHẬT LẠI HÀM SUBMIT: TRUYỀN THÊM role XUỐNG SERVICE
+                return service.submit(serverHost, serverPort, register, username, password, emailAddress, role);
             }
         };
         pendingTask = task;
