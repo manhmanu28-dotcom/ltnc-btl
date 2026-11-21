@@ -2,6 +2,7 @@ package com.auction.server.service;
 
 import com.auction.server.exception.AuctionException;
 import com.auction.server.model.auction.Auction;
+import com.auction.server.model.auction.AuctionSnapshot;
 import com.auction.server.model.auction.AuctionStatus;
 import com.auction.server.model.auction.AutoBidConfig;
 import com.auction.server.model.auction.BidTransaction;
@@ -42,14 +43,41 @@ public class AuctionManager {
             @Override
             public void onNewBid(Auction auction, BidTransaction transaction, boolean timeExtended) {
                 for (AuctionObserver observer : globalObservers) {
-                    observer.onNewBid(auction, transaction, timeExtended);
+                    try {
+                        observer.onNewBid(auction, transaction, timeExtended);
+                    } catch (RuntimeException ignored) {
+                        // Cô lập lỗi từng observer để không làm gián đoạn các observer khác
+                    }
+                }
+            }
+
+            @Override
+            public void onNewBid(AuctionSnapshot snapshot, BidTransaction transaction, boolean timeExtended) {
+                for (AuctionObserver observer : globalObservers) {
+                    try {
+                        observer.onNewBid(snapshot, transaction, timeExtended);
+                    } catch (RuntimeException ignored) {
+                    }
                 }
             }
 
             @Override
             public void onStatusChanged(Auction auction, AuctionStatus oldStatus, AuctionStatus newStatus) {
                 for (AuctionObserver observer : globalObservers) {
-                    observer.onStatusChanged(auction, oldStatus, newStatus);
+                    try {
+                        observer.onStatusChanged(auction, oldStatus, newStatus);
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+
+            @Override
+            public void onStatusChanged(AuctionSnapshot snapshot, AuctionStatus oldStatus, AuctionStatus newStatus) {
+                for (AuctionObserver observer : globalObservers) {
+                    try {
+                        observer.onStatusChanged(snapshot, oldStatus, newStatus);
+                    } catch (RuntimeException ignored) {
+                    }
                 }
             }
         };
@@ -74,7 +102,31 @@ public class AuctionManager {
             throw new IllegalArgumentException("Auction không được null!");
         }
         auction.addObserver(this.forwardingObserver);
-        this.auctionRegistry.put(auction.getId(), auction);
+        Auction previous = this.auctionRegistry.put(auction.getId(), auction);
+        if (previous != null && previous != auction) {
+            previous.removeObserver(this.forwardingObserver);
+        }
+    }
+
+    /**
+     * Hủy đăng ký phiên đấu giá khỏi bộ quản lý trung tâm.
+     */
+    public Auction unregisterAuction(String auctionId) {
+        if (auctionId == null) {
+            return null;
+        }
+        Auction removed = this.auctionRegistry.remove(auctionId);
+        if (removed != null) {
+            removed.removeObserver(this.forwardingObserver);
+        }
+        return removed;
+    }
+
+    /**
+     * Lấy bản chụp trạng thái nhất quán (Snapshot) của phiên đấu giá.
+     */
+    public AuctionSnapshot getSnapshot(String auctionId) {
+        return getAuctionOrThrow(auctionId).getSnapshot();
     }
 
     /**
@@ -123,10 +175,15 @@ public class AuctionManager {
 
     /**
      * Quét và cập nhật trạng thái tự động (OPEN -> RUNNING -> FINISHED) cho toàn bộ phiên tại mốc thời gian chỉ định.
+     * Cô lập ngoại lệ từng phiên để một phiên lỗi không làm chết luồng Scheduler nền.
      */
     public void tickLifecycle(LocalDateTime currentTime) {
         for (Auction auction : this.auctionRegistry.values()) {
-            auction.checkAndUpdateLifecycle(currentTime);
+            try {
+                auction.checkAndUpdateLifecycle(currentTime);
+            } catch (RuntimeException ignored) {
+                // Giữ cho ScheduledExecutorService tiếp tục chạy các phiên còn lại
+            }
         }
     }
 

@@ -42,6 +42,8 @@ public class Auction extends BaseEntity {
     private double currentHighestBid;
     private String currentWinnerId;
     private String currentWinnerUsername;
+    private transient Bidder currentWinner;
+    private double currentHeldAmount;
     private AuctionStatus status;
 
     private int antiSnipingTriggerSeconds;
@@ -65,8 +67,8 @@ public class Auction extends BaseEntity {
         if (sellerId == null || sellerId.trim().isEmpty()) {
             throw new IllegalArgumentException("Seller ID không được để trống!");
         }
-        if (minIncrement <= 0) {
-            throw new IllegalArgumentException("Bước giá tối thiểu (minIncrement) phải lớn hơn 0!");
+        if (!Double.isFinite(minIncrement) || minIncrement <= 0) {
+            throw new IllegalArgumentException("Bước giá tối thiểu (minIncrement) phải là số hữu hạn lớn hơn 0!");
         }
         if (startTime == null || endTime == null || !endTime.isAfter(startTime)) {
             throw new IllegalArgumentException("Thời gian kết thúc phải sau thời gian bắt đầu!");
@@ -81,6 +83,8 @@ public class Auction extends BaseEntity {
         this.currentHighestBid = item.getStartingPrice();
         this.currentWinnerId = null;
         this.currentWinnerUsername = null;
+        this.currentWinner = null;
+        this.currentHeldAmount = 0.0;
         this.status = AuctionStatus.OPEN;
 
         this.antiSnipingTriggerSeconds = DEFAULT_ANTI_SNIPING_TRIGGER_SECONDS;
@@ -129,6 +133,7 @@ public class Auction extends BaseEntity {
 
     private void transitionStatus(AuctionStatus targetStatus) {
         AuctionStatus oldStatus;
+        AuctionSnapshot snapshot;
         lock.lock();
         try {
             if (!this.status.canTransitionTo(targetStatus)) {
@@ -136,12 +141,24 @@ public class Auction extends BaseEntity {
                         "Không thể chuyển trạng thái phiên [%s] từ %s sang %s!",
                         getId(), this.status, targetStatus));
             }
+            if (targetStatus == AuctionStatus.PAID) {
+                if (this.currentWinnerId == null) {
+                    throw new InvalidStateTransitionException(String.format(
+                            "Không thể xác nhận thanh toán phiên [%s] vì chưa có người thắng!",
+                            getId()));
+                }
+                settleCurrentWinnerHoldInternal();
+            } else if (targetStatus == AuctionStatus.CANCELED) {
+                releaseCurrentWinnerHoldInternal();
+                this.autoBidQueue.clear();
+            }
             oldStatus = this.status;
             this.status = targetStatus;
+            snapshot = createSnapshotInternal();
         } finally {
             lock.unlock();
         }
-        notifyStatusChanged(oldStatus, targetStatus);
+        notifyStatusChanged(snapshot, oldStatus, targetStatus);
     }
 
     /**
@@ -149,28 +166,27 @@ public class Auction extends BaseEntity {
      * Được gọi định kỳ bởi AuctionManager Scheduler hoặc trước khi xử lý thao tác.
      */
     public void checkAndUpdateLifecycle(LocalDateTime now) {
-        AuctionStatus oldStatus = null;
-        AuctionStatus newStatus = null;
+        List<StatusTransitionRecord> transitions = new ArrayList<>(2);
 
         lock.lock();
         try {
             LocalDateTime currentTime = (now != null) ? now : LocalDateTime.now();
             if (this.status == AuctionStatus.OPEN && !currentTime.isBefore(this.startTime)) {
-                oldStatus = this.status;
+                AuctionStatus oldStatus = this.status;
                 this.status = AuctionStatus.RUNNING;
-                newStatus = this.status;
+                transitions.add(new StatusTransitionRecord(oldStatus, this.status, createSnapshotInternal()));
             }
             if (this.status == AuctionStatus.RUNNING && currentTime.isAfter(this.endTime)) {
-                oldStatus = this.status;
+                AuctionStatus oldStatus = this.status;
                 this.status = AuctionStatus.FINISHED;
-                newStatus = this.status;
+                transitions.add(new StatusTransitionRecord(oldStatus, this.status, createSnapshotInternal()));
             }
         } finally {
             lock.unlock();
         }
 
-        if (oldStatus != null && newStatus != null && oldStatus != newStatus) {
-            notifyStatusChanged(oldStatus, newStatus);
+        for (StatusTransitionRecord transition : transitions) {
+            notifyStatusChanged(transition.snapshot, transition.oldStatus, transition.newStatus);
         }
     }
 
@@ -200,7 +216,7 @@ public class Auction extends BaseEntity {
     public BidTransaction placeBid(Bidder bidder, double amount, LocalDateTime bidTime) {
         List<BidEventRecord> generatedEvents = new ArrayList<>();
         AntiSnipingContext antiSnipingContext = new AntiSnipingContext();
-        AuctionStatus autoClosedFromStatus = null;
+        AuctionSnapshot autoClosedSnapshot = null;
         BidTransaction manualTransaction;
 
         lock.lock();
@@ -209,8 +225,8 @@ public class Auction extends BaseEntity {
 
             // 1. Kiểm tra trạng thái phiên và thời hạn phiên
             if (this.status == AuctionStatus.RUNNING && effectiveTime.isAfter(this.endTime)) {
-                autoClosedFromStatus = this.status;
                 this.status = AuctionStatus.FINISHED;
+                autoClosedSnapshot = createSnapshotInternal();
             }
             if (this.status != AuctionStatus.RUNNING) {
                 throw new AuctionClosedException(String.format(
@@ -218,7 +234,10 @@ public class Auction extends BaseEntity {
                         getId(), this.status));
             }
 
-            // 2. Kiểm tra thông tin và quyền của Bidder
+            // 2. Chặn giá trị không hữu hạn (NaN / Infinity) và kiểm tra quyền Bidder
+            if (!Double.isFinite(amount) || amount <= 0) {
+                throw new InvalidBidException("Số tiền đặt giá phải là số hữu hạn lớn hơn 0!");
+            }
             validateBidder(bidder, amount);
 
             // 3. Kiểm tra người dẫn đầu tự đặt đè lên chính mình
@@ -235,7 +254,7 @@ public class Auction extends BaseEntity {
                         amount, minimumAllowedBid));
             }
 
-            // 5. Ghi nhận giao dịch đặt giá nguyên tử & kiểm tra Anti-sniping
+            // 5. Giữ tiền khả dụng + ghi nhận giao dịch nguyên tử & kiểm tra Anti-sniping
             manualTransaction = recordBidInternal(
                     bidder, amount, effectiveTime, false, generatedEvents, antiSnipingContext);
 
@@ -247,11 +266,11 @@ public class Auction extends BaseEntity {
         }
 
         // Phát thông báo Observer bên ngoài vùng khóa để tránh Deadlock I/O
-        if (autoClosedFromStatus != null) {
-            notifyStatusChanged(autoClosedFromStatus, AuctionStatus.FINISHED);
+        if (autoClosedSnapshot != null) {
+            notifyStatusChanged(autoClosedSnapshot, AuctionStatus.RUNNING, AuctionStatus.FINISHED);
         }
         for (BidEventRecord event : generatedEvents) {
-            notifyNewBid(event.transaction, event.timeExtended);
+            notifyNewBid(event.snapshot, event.transaction, event.timeExtended);
         }
 
         return manualTransaction;
@@ -274,7 +293,7 @@ public class Auction extends BaseEntity {
     public AutoBidConfig registerAutoBid(Bidder bidder, double maxBid, double increment, LocalDateTime registeredAt) {
         List<BidEventRecord> generatedEvents = new ArrayList<>();
         AntiSnipingContext antiSnipingContext = new AntiSnipingContext();
-        AuctionStatus autoClosedFromStatus = null;
+        AuctionSnapshot autoClosedSnapshot = null;
         AutoBidConfig config;
 
         lock.lock();
@@ -282,13 +301,20 @@ public class Auction extends BaseEntity {
             LocalDateTime effectiveTime = (registeredAt != null) ? registeredAt : LocalDateTime.now();
 
             if (this.status == AuctionStatus.RUNNING && effectiveTime.isAfter(this.endTime)) {
-                autoClosedFromStatus = this.status;
                 this.status = AuctionStatus.FINISHED;
+                autoClosedSnapshot = createSnapshotInternal();
             }
             if (this.status != AuctionStatus.RUNNING) {
                 throw new AuctionClosedException(String.format(
                         "Không thể đăng ký Auto-Bid vì phiên [%s] đang ở trạng thái %s.",
                         getId(), this.status));
+            }
+
+            if (!Double.isFinite(maxBid) || maxBid <= 0) {
+                throw new InvalidBidException("Giá tối đa Auto-Bid phải là số hữu hạn lớn hơn 0!");
+            }
+            if (!Double.isFinite(increment) || increment <= 0) {
+                throw new InvalidBidException("Bước giá Auto-Bid phải là số hữu hạn lớn hơn 0!");
             }
 
             validateBidder(bidder, maxBid);
@@ -323,11 +349,11 @@ public class Auction extends BaseEntity {
             lock.unlock();
         }
 
-        if (autoClosedFromStatus != null) {
-            notifyStatusChanged(autoClosedFromStatus, AuctionStatus.FINISHED);
+        if (autoClosedSnapshot != null) {
+            notifyStatusChanged(autoClosedSnapshot, AuctionStatus.RUNNING, AuctionStatus.FINISHED);
         }
         for (BidEventRecord event : generatedEvents) {
-            notifyNewBid(event.transaction, event.timeExtended);
+            notifyNewBid(event.snapshot, event.transaction, event.timeExtended);
         }
 
         return config;
@@ -341,47 +367,52 @@ public class Auction extends BaseEntity {
      */
     private void resolveAutoBidsInternal(LocalDateTime eventTime, List<BidEventRecord> generatedEvents,
                                          AntiSnipingContext antiSnipingContext) {
-        // Loại bỏ các Auto-Bid không còn đủ số dư hoặc đã tụt lại phía sau giá hiện tại
-        this.autoBidQueue.removeIf(cfg ->
-                cfg.getMaxBid() < this.currentHighestBid || cfg.getBidder().getBalance() < cfg.getMaxBid());
+        while (true) {
+            // Loại bỏ các Auto-Bid không còn đủ số dư khả dụng hoặc đã tụt lại phía sau giá hiện tại
+            this.autoBidQueue.removeIf(cfg -> cfg.getMaxBid() < this.currentHighestBid
+                    || effectiveAvailableBalanceInternal(cfg.getBidder()) < cfg.getMaxBid());
 
-        if (this.autoBidQueue.isEmpty()) {
-            return;
-        }
-
-        List<AutoBidConfig> sortedConfigs = new ArrayList<>(this.autoBidQueue);
-        Collections.sort(sortedConfigs);
-
-        AutoBidConfig leader = sortedConfigs.get(0);
-        AutoBidConfig runnerUp = sortedConfigs.size() > 1 ? sortedConfigs.get(1) : null;
-
-        // Một proxy bidder chỉ cần đặt vừa đủ để vượt giá hiện tại và giá trần
-        // của đối thủ kế tiếp. maxBid là giới hạn bí mật, không phải mức giá đã trả.
-        double requiredMin = getMinimumNextBidInternal();
-        double step = Math.max(this.minIncrement, leader.getIncrement());
-        double targetAmount;
-
-        if (runnerUp == null) {
-            if (leader.getBidderId().equals(this.currentWinnerId)) {
+            if (this.autoBidQueue.isEmpty()) {
                 return;
             }
-            targetAmount = this.currentWinnerId == null
-                    ? this.item.getStartingPrice()
-                    : Math.min(leader.getMaxBid(), this.currentHighestBid + step);
-        } else {
-            // PriorityQueue phân xử hòa maxBid theo thời điểm đăng ký sớm hơn.
-            // Người đang dẫn đầu chỉ tăng giá khi đối thủ kế tiếp buộc họ phải tăng.
-            targetAmount = runnerUp.getMaxBid() + step;
-            if (!leader.getBidderId().equals(this.currentWinnerId)) {
-                targetAmount = Math.max(targetAmount, this.currentHighestBid + step);
-            }
-            targetAmount = Math.min(targetAmount, leader.getMaxBid());
-        }
 
-        if ((targetAmount >= requiredMin && targetAmount > this.currentHighestBid)
-                || (this.currentWinnerId == null && targetAmount >= this.item.getStartingPrice())) {
-            recordBidInternal(leader.getBidder(), targetAmount, eventTime, true,
-                    generatedEvents, antiSnipingContext);
+            List<AutoBidConfig> sortedConfigs = new ArrayList<>(this.autoBidQueue);
+            Collections.sort(sortedConfigs);
+
+            AutoBidConfig leader = sortedConfigs.get(0);
+            AutoBidConfig runnerUp = sortedConfigs.size() > 1 ? sortedConfigs.get(1) : null;
+
+            double requiredMin = getMinimumNextBidInternal();
+            double step = Math.max(this.minIncrement, leader.getIncrement());
+            double targetAmount;
+
+            if (runnerUp == null) {
+                if (leader.getBidderId().equals(this.currentWinnerId)) {
+                    return;
+                }
+                targetAmount = this.currentWinnerId == null
+                        ? this.item.getStartingPrice()
+                        : Math.min(leader.getMaxBid(), this.currentHighestBid + step);
+            } else {
+                targetAmount = runnerUp.getMaxBid() + step;
+                if (!leader.getBidderId().equals(this.currentWinnerId)) {
+                    targetAmount = Math.max(targetAmount, this.currentHighestBid + step);
+                }
+                targetAmount = Math.min(targetAmount, leader.getMaxBid());
+            }
+
+            if ((targetAmount >= requiredMin && targetAmount > this.currentHighestBid)
+                    || (this.currentWinnerId == null && targetAmount >= this.item.getStartingPrice())) {
+                try {
+                    recordBidInternal(leader.getBidder(), targetAmount, eventTime, true,
+                            generatedEvents, antiSnipingContext);
+                } catch (InvalidBidException insufficientFunds) {
+                    // Bidder không còn đủ số dư khả dụng (do đã thắng ở phiên khác) -> loại và xét người tiếp theo
+                    this.autoBidQueue.removeIf(cfg -> cfg.getBidderId().equals(leader.getBidderId()));
+                    continue;
+                }
+            }
+            break;
         }
 
         // Giữ cấu hình người đang dẫn đầu để họ có thể phản ứng với đối thủ mới.
@@ -404,11 +435,56 @@ public class Auction extends BaseEntity {
         if (bidder.getId().equals(this.sellerId)) {
             throw new InvalidBidException("Người bán không được tự đặt giá vào phiên của chính mình!");
         }
-        if (bidder.getBalance() < requiredAmount) {
+        double effectiveAvailable = effectiveAvailableBalanceInternal(bidder);
+        if (effectiveAvailable + 1e-6 < requiredAmount) {
             throw new InvalidBidException(String.format(
-                    "Số dư tài khoản (%,.0f VNĐ) không đủ để đảm bảo mức giá %,.0f VNĐ!",
-                    bidder.getBalance(), requiredAmount));
+                    "Số dư khả dụng (%,.0f VNĐ) không đủ để đảm bảo mức giá %,.0f VNĐ!",
+                    effectiveAvailable, requiredAmount));
         }
+    }
+
+    private double effectiveAvailableBalanceInternal(Bidder bidder) {
+        double available = bidder.getAvailableBalance();
+        if (this.currentWinner == bidder) {
+            return available + this.currentHeldAmount;
+        }
+        return available;
+    }
+
+    private void holdBidFundsInternal(Bidder bidder, double amount) {
+        if (this.currentWinner == bidder) {
+            double delta = amount - this.currentHeldAmount;
+            if (delta > 0.0 && !bidder.tryHold(delta)) {
+                throw new InvalidBidException(String.format(
+                        "Số dư khả dụng (%,.0f VNĐ) không đủ để nâng giá thêm %,.0f VNĐ!",
+                        bidder.getAvailableBalance(), delta));
+            }
+            this.currentHeldAmount = amount;
+            return;
+        }
+
+        if (!bidder.tryHold(amount)) {
+            throw new InvalidBidException(String.format(
+                    "Số dư khả dụng (%,.0f VNĐ) không đủ để đảm bảo mức giá %,.0f VNĐ!",
+                    bidder.getAvailableBalance(), amount));
+        }
+        releaseCurrentWinnerHoldInternal();
+        this.currentWinner = bidder;
+        this.currentHeldAmount = amount;
+    }
+
+    private void releaseCurrentWinnerHoldInternal() {
+        if (this.currentWinner != null && this.currentHeldAmount > 0.0) {
+            this.currentWinner.releaseHold(this.currentHeldAmount);
+        }
+        this.currentHeldAmount = 0.0;
+    }
+
+    private void settleCurrentWinnerHoldInternal() {
+        if (this.currentWinner != null && this.currentHeldAmount > 0.0) {
+            this.currentWinner.settleHold(this.currentHeldAmount);
+        }
+        this.currentHeldAmount = 0.0;
     }
 
     private double getMinimumNextBidInternal() {
@@ -421,6 +497,9 @@ public class Auction extends BaseEntity {
     private BidTransaction recordBidInternal(Bidder bidder, double amount, LocalDateTime bidTime,
                                              boolean isAutoBid, List<BidEventRecord> generatedEvents,
                                              AntiSnipingContext antiSnipingContext) {
+        // Giữ tiền khả dụng trước khi thay đổi trạng thái phiên để đảm bảo tính nguyên tử
+        holdBidFundsInternal(bidder, amount);
+
         this.currentHighestBid = amount;
         this.currentWinnerId = bidder.getId();
         this.currentWinnerUsername = bidder.getUsername();
@@ -439,7 +518,7 @@ public class Auction extends BaseEntity {
             }
         }
 
-        String txId = "BID-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String txId = "BID-" + UUID.randomUUID().toString().toUpperCase();
         BidTransaction transaction = new BidTransaction(
                 txId,
                 getId(),
@@ -450,17 +529,45 @@ public class Auction extends BaseEntity {
                 isAutoBid
         );
         this.bidHistory.add(transaction);
-        generatedEvents.add(new BidEventRecord(transaction, timeExtended));
+        generatedEvents.add(new BidEventRecord(transaction, timeExtended, createSnapshotInternal()));
         return transaction;
+    }
+
+    private AuctionSnapshot createSnapshotInternal() {
+        return new AuctionSnapshot(
+                getId(),
+                this.item.getTitle(),
+                this.status,
+                this.currentHighestBid,
+                getMinimumNextBidInternal(),
+                this.currentWinnerId,
+                this.currentWinnerUsername,
+                this.endTime,
+                this.bidHistory.size()
+        );
     }
 
     private static final class BidEventRecord {
         private final BidTransaction transaction;
         private final boolean timeExtended;
+        private final AuctionSnapshot snapshot;
 
-        private BidEventRecord(BidTransaction transaction, boolean timeExtended) {
+        private BidEventRecord(BidTransaction transaction, boolean timeExtended, AuctionSnapshot snapshot) {
             this.transaction = transaction;
             this.timeExtended = timeExtended;
+            this.snapshot = snapshot;
+        }
+    }
+
+    private static final class StatusTransitionRecord {
+        private final AuctionStatus oldStatus;
+        private final AuctionStatus newStatus;
+        private final AuctionSnapshot snapshot;
+
+        private StatusTransitionRecord(AuctionStatus oldStatus, AuctionStatus newStatus, AuctionSnapshot snapshot) {
+            this.oldStatus = oldStatus;
+            this.newStatus = newStatus;
+            this.snapshot = snapshot;
         }
     }
 
@@ -483,15 +590,29 @@ public class Auction extends BaseEntity {
         this.observers.remove(observer);
     }
 
-    private void notifyNewBid(BidTransaction transaction, boolean timeExtended) {
+    private void notifyNewBid(AuctionSnapshot snapshot, BidTransaction transaction, boolean timeExtended) {
         for (AuctionObserver observer : this.observers) {
+            observer.onNewBid(snapshot, transaction, timeExtended);
             observer.onNewBid(this, transaction, timeExtended);
         }
     }
 
-    private void notifyStatusChanged(AuctionStatus oldStatus, AuctionStatus newStatus) {
+    private void notifyStatusChanged(AuctionSnapshot snapshot, AuctionStatus oldStatus, AuctionStatus newStatus) {
         for (AuctionObserver observer : this.observers) {
+            observer.onStatusChanged(snapshot, oldStatus, newStatus);
             observer.onStatusChanged(this, oldStatus, newStatus);
+        }
+    }
+
+    /**
+     * Trả về bản chụp trạng thái nhất quán (Snapshot) dưới một lần khóa duy nhất.
+     */
+    public AuctionSnapshot getSnapshot() {
+        lock.lock();
+        try {
+            return createSnapshotInternal();
+        } finally {
+            lock.unlock();
         }
     }
 

@@ -25,8 +25,8 @@ public class BidTransaction extends BaseEntity {
         if (bidderId == null || bidderId.trim().isEmpty()) {
             throw new IllegalArgumentException("Bidder ID không được để trống!");
         }
-        if (amount <= 0) {
-            throw new IllegalArgumentException("Số tiền đặt giá phải lớn hơn 0!");
+        if (!Double.isFinite(amount) || amount <= 0) {
+            throw new IllegalArgumentException("Số tiền đặt giá phải là số hữu hạn lớn hơn 0!");
         }
         this.auctionId = auctionId.trim();
         this.bidderId = bidderId.trim();

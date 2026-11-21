@@ -23,11 +23,11 @@ public class AutoBidConfig implements Comparable<AutoBidConfig> {
         if (bidder == null || !bidder.canBid()) {
             throw new IllegalArgumentException("Người đăng ký Auto-Bid phải là Bidder hợp lệ!");
         }
-        if (maxBid <= 0) {
-            throw new IllegalArgumentException("Giá tối đa (maxBid) phải lớn hơn 0!");
+        if (!Double.isFinite(maxBid) || maxBid <= 0) {
+            throw new IllegalArgumentException("Giá tối đa (maxBid) phải là số hữu hạn lớn hơn 0!");
         }
-        if (increment <= 0) {
-            throw new IllegalArgumentException("Bước giá tự động (increment) phải lớn hơn 0!");
+        if (!Double.isFinite(increment) || increment <= 0) {
+            throw new IllegalArgumentException("Bước giá tự động (increment) phải là số hữu hạn lớn hơn 0!");
         }
         this.bidder = bidder;
         this.maxBid = maxBid;
@@ -77,8 +77,12 @@ public class AutoBidConfig implements Comparable<AutoBidConfig> {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof AutoBidConfig)) return false;
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof AutoBidConfig)) {
+            return false;
+        }
         AutoBidConfig that = (AutoBidConfig) o;
         return Objects.equals(getBidderId(), that.getBidderId());
     }
