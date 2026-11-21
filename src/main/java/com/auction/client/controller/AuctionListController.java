@@ -1,40 +1,41 @@
 package com.auction.client.controller;
-import javafx.scene.control.ButtonBar;
-import javafx.scene.control.ButtonType;
-import javafx.scene.control.Dialog;
-import javafx.scene.control.TextArea;
-import javafx.scene.layout.GridPane;
+
 import com.auction.client.model.AuctionSummary;
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuctionListService;
 import com.auction.client.ui.AuctionTheme;
+import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
 import javafx.concurrent.Task;
-import javafx.beans.property.ReadOnlyObjectWrapper;
-import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Parent;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 
 import java.text.NumberFormat;
-import java.util.Locale;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -53,6 +54,7 @@ public class AuctionListController implements AutoCloseable {
     private final Label selectionLabel = new Label("Chọn một phiên trong bảng để vào phòng.");
     private final Button enterRoomButton = new Button("Vào phòng");
     private final Button reloadButton = new Button("Tải danh sách");
+    private final Button createAuctionButton = new Button("+ Đăng bán sản phẩm");
     private final TextField hostField = new TextField("127.0.0.1");
     private final TextField portField = new TextField("8888");
     private final Label connectionLabel = new Label("Nhập địa chỉ server rồi bấm Tải danh sách.");
@@ -99,6 +101,8 @@ public class AuctionListController implements AutoCloseable {
         enterRoomButton.getStyleClass().add("primary-button");
         reloadButton.getStyleClass().add("secondary-button");
         reloadButton.setOnAction(event -> loadAuctions());
+        createAuctionButton.getStyleClass().add("primary-button");
+        createAuctionButton.setOnAction(event -> showCreateAuctionDialog());
         hostField.setPrefColumnCount(12);
         portField.setPrefColumnCount(5);
         HBox connectionBar = new HBox(10, new Label("Server:"), hostField,
@@ -107,7 +111,7 @@ public class AuctionListController implements AutoCloseable {
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox heading = new HBox(16, title, spacer, reloadButton);
+        HBox heading = new HBox(12, title, spacer, createAuctionButton, reloadButton);
         heading.setAlignment(Pos.CENTER_LEFT);
 
         VBox total = summaryCard("Tổng số phiên", totalCount);
@@ -310,6 +314,7 @@ public class AuctionListController implements AutoCloseable {
         loading = value;
         reloadButton.setDisable(value);
         reloadButton.setText(value ? "Đang tải…" : "Tải danh sách");
+        createAuctionButton.setDisable(value);
         hostField.setDisable(value);
         portField.setDisable(value);
         enterRoomButton.setDisable(value || auctionTable.getSelectionModel().getSelectedItem() == null);
@@ -341,6 +346,102 @@ public class AuctionListController implements AutoCloseable {
                 + "\nTrạng thái: " + statusText(selected.status())
                 + "\n\nĐây là bản xem trước. Phòng đấu giá realtime chưa được kết nối.");
         preview.showAndWait();
+    }
+
+    private void showCreateAuctionDialog() {
+        if (session == null) {
+            Alert alert = new Alert(Alert.AlertType.WARNING, "Vui lòng đăng nhập để đăng bán sản phẩm.");
+            AuctionTheme.apply(alert.getDialogPane());
+            alert.initOwner(view.getScene().getWindow());
+            alert.showAndWait();
+            return;
+        }
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Đăng bán sản phẩm mới");
+        dialog.setHeaderText("Nhập thông tin vật phẩm để mở phiên đấu giá (Bạn sẽ là Seller của phiên này)");
+        dialog.initOwner(view.getScene().getWindow());
+        AuctionTheme.apply(dialog.getDialogPane());
+
+        ButtonType submitType = new ButtonType("Tạo phiên đấu giá", ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(submitType, ButtonType.CANCEL);
+
+        TextField titleField = new TextField();
+        titleField.setPromptText("Ví dụ: MacBook Pro M3");
+
+        ComboBox<String> categoryBox = new ComboBox<>();
+        categoryBox.getItems().addAll("ELECTRONICS", "ART", "VEHICLE");
+        categoryBox.setValue("ELECTRONICS");
+        categoryBox.setMaxWidth(Double.MAX_VALUE);
+
+        TextArea descField = new TextArea();
+        descField.setPromptText("Mô tả tình trạng, phụ kiện đi kèm...");
+        descField.setPrefRowCount(3);
+
+        TextField priceField = new TextField();
+        priceField.setPromptText("Ví dụ: 15000000");
+
+        TextField incrementField = new TextField("500000");
+        TextField durationField = new TextField("60");
+
+        GridPane grid = new GridPane();
+        grid.setHgap(12);
+        grid.setVgap(10);
+        grid.setPadding(new Insets(16, 16, 8, 16));
+        grid.addRow(0, new Label("Tên sản phẩm:"), titleField);
+        grid.addRow(1, new Label("Danh mục:"), categoryBox);
+        grid.addRow(2, new Label("Mô tả:"), descField);
+        grid.addRow(3, new Label("Giá khởi điểm (VNĐ):"), priceField);
+        grid.addRow(4, new Label("Bước giá tối thiểu:"), incrementField);
+        grid.addRow(5, new Label("Thời lượng (phút):"), durationField);
+        GridPane.setHgrow(titleField, Priority.ALWAYS);
+
+        dialog.getDialogPane().setContent(grid);
+
+        dialog.showAndWait().ifPresent(result -> {
+            if (result != submitType) {
+                return;
+            }
+            try {
+                String title = titleField.getText().trim();
+                String desc = descField.getText().trim();
+                String category = categoryBox.getValue();
+                double startingPrice = Double.parseDouble(priceField.getText().trim());
+                double minIncrement = Double.parseDouble(incrementField.getText().trim());
+                int duration = Integer.parseInt(durationField.getText().trim());
+
+                if (title.isEmpty() || startingPrice <= 0 || minIncrement <= 0 || duration <= 0) {
+                    throw new IllegalArgumentException("Thông tin sản phẩm hoặc giá không hợp lệ.");
+                }
+
+                setLoading(true);
+                connectionLabel.setText("Đang tạo phiên đấu giá mới…");
+                Task<Void> createTask = new Task<>() {
+                    @Override
+                    protected Void call() throws Exception {
+                        auctionService.createAuction(session.client(), title, desc, category,
+                                startingPrice, minIncrement, duration);
+                        return null;
+                    }
+                };
+                createTask.setOnSucceeded(e -> {
+                    setLoading(false);
+                    connectionLabel.setText("Đã tạo phiên đấu giá thành công: " + title);
+                    loadAuctions();
+                });
+                createTask.setOnFailed(e -> {
+                    setLoading(false);
+                    connectionLabel.setText("Tạo phiên thất bại: " + createTask.getException().getMessage());
+                });
+                networkExecutor.execute(createTask);
+            } catch (Exception ex) {
+                Alert error = new Alert(Alert.AlertType.ERROR,
+                        "Vui lòng nhập đầy đủ tên sản phẩm và các giá trị số hợp lệ (> 0).");
+                AuctionTheme.apply(error.getDialogPane());
+                error.initOwner(view.getScene().getWindow());
+                error.showAndWait();
+            }
+        });
     }
 
     private String statusText(String status) {
