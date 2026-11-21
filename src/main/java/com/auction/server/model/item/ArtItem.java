@@ -10,12 +10,14 @@ public class ArtItem extends Item {
     public ArtItem(String id, String title, String description, double startingPrice,
                    String artistName, boolean hasCertificate) {
         super(id, title, description, startingPrice);
-        this.artistName = artistName;
+        this.artistName = (artistName != null && !artistName.trim().isEmpty())
+                ? artistName.trim() : "Khuyết danh";
         this.hasCertificate = hasCertificate;
     }
 
     @Override
     public double calculateShippingFee(double distanceKm) {
+        validateDistance(distanceKm);
         // Tác phẩm nghệ thuật tính thêm 2% giá khởi điểm tiền bảo hiểm hàng quý + 15.000đ/km
         double insuranceFee = getStartingPrice() * 0.02;
         return insuranceFee + (distanceKm * 15_000);

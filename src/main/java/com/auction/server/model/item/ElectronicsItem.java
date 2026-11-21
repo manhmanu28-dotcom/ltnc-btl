@@ -10,12 +10,16 @@ public class ElectronicsItem extends Item {
     public ElectronicsItem(String id, String title, String description, double startingPrice,
                            int warrantyMonths, String brand) {
         super(id, title, description, startingPrice);
+        if (warrantyMonths < 0) {
+            throw new IllegalArgumentException("Thời hạn bảo hành không thể âm!");
+        }
         this.warrantyMonths = warrantyMonths;
-        this.brand = brand;
+        this.brand = (brand != null && !brand.trim().isEmpty()) ? brand.trim() : "Chưa rõ";
     }
 
     @Override
     public double calculateShippingFee(double distanceKm) {
+        validateDistance(distanceKm);
         // Cước cơ bản: 5.000đ/km + 50.000đ đóng gói chống sốc/hàng dễ vỡ điện tử
         return 50_000 + (distanceKm * 5_000);
     }

@@ -10,12 +10,19 @@ public class VehicleItem extends Item {
     public VehicleItem(String id, String title, String description, double startingPrice,
                        int mileage, int manufactureYear) {
         super(id, title, description, startingPrice);
+        if (mileage < 0) {
+            throw new IllegalArgumentException("Số km đã chạy (mileage) không thể âm!");
+        }
+        if (manufactureYear < 1886) {
+            throw new IllegalArgumentException("Năm sản xuất phương tiện không hợp lệ!");
+        }
         this.mileage = mileage;
         this.manufactureYear = manufactureYear;
     }
 
     @Override
     public double calculateShippingFee(double distanceKm) {
+        validateDistance(distanceKm);
         // Vận chuyển bằng xe chuyên dụng cứu hộ sàn phẳng: 25.000đ/km + 500.000đ phí bến bãi
         return 500_000 + (distanceKm * 25_000);
     }
