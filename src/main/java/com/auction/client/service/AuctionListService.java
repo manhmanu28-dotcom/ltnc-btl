@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /** Gọi Socket và chuyển dữ liệu JSON thành các dòng của bảng, không phụ thuộc JavaFX. */
-public class AuctionListService {
+public class  AuctionListService {
 
     // Hàm này chờ mạng nên controller phải gọi trên luồng nền.
     public List<AuctionSummary> fetchAuctions(String host, int port) throws IOException {
@@ -47,5 +47,26 @@ public class AuctionListService {
             result.add(new AuctionSummary(id, title, price.doubleValue(), status));
         }
         return result;
+    }
+    public void createAuction(AuctionSocketClient client,
+                              String title,
+                              String description,
+                              String category,
+                              double startingPrice,
+                              double minIncrement,
+                              int durationMinutes) throws IOException {
+        SocketRequest request = SocketRequest.of(ActionType.CREATE_AUCTION)
+                .putPayload("title", title)
+                .putPayload("description", description)
+                .putPayload("category", category)
+                .putPayload("startingPrice", startingPrice)
+                .putPayload("minIncrement", minIncrement)
+                .putPayload("durationMinutes", durationMinutes)
+                .putPayload("startImmediately", "true");
+
+        SocketResponse response = client.sendRequest(request);
+        if (!response.isSuccess()) {
+            throw new IOException(response.getMessage());
+        }
     }
 }

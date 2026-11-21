@@ -13,9 +13,8 @@ public class AuthenticationClientService implements AutoCloseable {
     private String host;
     private int port;
 
-    // CẬP NHẬT: Thêm tham số String role vào hàm submit
     public SocketResponse submit(String host, int port, boolean register,
-                                 String username, String password, String email, String role) throws IOException {
+                                 String username, String password, String email) throws IOException {
         if (client == null || !client.isConnected() || !host.equals(this.host) || port != this.port) {
             close();
             client = new AuctionSocketClient(host, port);
@@ -26,13 +25,9 @@ public class AuthenticationClientService implements AutoCloseable {
         SocketRequest request = SocketRequest.of(register ? ActionType.REGISTER : ActionType.LOGIN)
                 .putPayload("username", username)
                 .putPayload("password", password);
-
         if (register) {
             request.putPayload("email", email);
-            // CẬP NHẬT: Đóng gói vai trò (role) gửi xuống Server
-            request.putPayload("role", role);
         }
-
         SocketResponse response = client.sendRequest(request);
         if (!response.isSuccess()) {
             throw new IOException(response.getMessage());

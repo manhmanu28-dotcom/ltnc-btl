@@ -254,6 +254,10 @@ public class ClientHandler implements Runnable, Closeable {
     private SocketResponse handlePlaceBid(SocketRequest request) {
         String auctionId = requireAuctionId(request);
         Bidder bidder = resolveBidder(request);
+        Auction auction = auctionManager.getAuctionOrThrow(auctionId);
+        if (bidder.getId().equals(auction.getSellerId())) {
+            throw new IllegalArgumentException("Bạn là người bán của phiên này nên không thể tự đặt giá.");
+        }
         double amount = request.getRequiredPayloadDouble("amount");
 
         // Tự động cho Client vào danh sách theo dõi phiên khi đặt giá
@@ -276,6 +280,9 @@ public class ClientHandler implements Runnable, Closeable {
         Bidder bidder = resolveBidder(request);
         double maxBid = request.getRequiredPayloadDouble("maxBid");
         Auction auction = auctionManager.getAuctionOrThrow(auctionId);
+        if (bidder.getId().equals(auction.getSellerId())) {
+            throw new IllegalArgumentException("Bạn là người bán của phiên này nên không thể cài Auto-Bid.");
+        }
         double increment = request.getPayloadDouble("increment", auction.getMinIncrement());
 
         broadcastManager.watchAuction(auctionId, this);
@@ -292,12 +299,14 @@ public class ClientHandler implements Runnable, Closeable {
     }
 
     private SocketResponse handleCreateAuction(SocketRequest request) {
-        String sellerId = request.getUserId();
+        String sellerId = (this.authenticatedBidder != null)
+                ? this.authenticatedBidder.getId()
+                : request.getUserId();
         if (sellerId == null || sellerId.trim().isEmpty()) {
             sellerId = request.getPayloadString("sellerId");
         }
         if (sellerId == null || sellerId.trim().isEmpty()) {
-            throw new IllegalArgumentException("Thiếu mã người bán (sellerId/userId) khi tạo phiên đấu giá!");
+            throw new IllegalArgumentException("Vui lòng đăng nhập trước khi đăng bán sản phẩm!");
         }
 
         String categoryStr = request.getPayloadString("category");
