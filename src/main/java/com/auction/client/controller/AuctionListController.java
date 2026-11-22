@@ -4,9 +4,11 @@ import com.auction.client.model.AuctionSummary;
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuctionListService;
 import com.auction.client.ui.AuctionTheme;
+import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
@@ -21,21 +23,20 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
-import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TitledPane;
-import javafx.collections.ListChangeListener;
-import javafx.scene.layout.TilePane;
-import javafx.scene.layout.StackPane;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.TilePane;
 import javafx.scene.layout.VBox;
 
 import java.text.NumberFormat;
@@ -477,9 +478,12 @@ public class AuctionListController implements AutoCloseable {
         descField.setPrefRowCount(3);
 
         TextField priceField = new TextField();
-        priceField.setPromptText("Ví dụ: 15000000");
+        priceField.setPromptText("Ví dụ: 12,000 VNĐ");
+        attachVndFormatter(priceField);
 
-        TextField incrementField = new TextField("500000");
+        TextField incrementField = new TextField("500,000 VNĐ");
+        attachVndFormatter(incrementField);
+
         TextField durationField = new TextField("60");
 
         GridPane grid = new GridPane();
@@ -490,7 +494,7 @@ public class AuctionListController implements AutoCloseable {
         grid.addRow(1, new Label("Danh mục:"), categoryBox);
         grid.addRow(2, new Label("Mô tả:"), descField);
         grid.addRow(3, new Label("Giá khởi điểm (VNĐ):"), priceField);
-        grid.addRow(4, new Label("Bước giá tối thiểu:"), incrementField);
+        grid.addRow(4, new Label("Bước giá tối thiểu (VNĐ):"), incrementField);
         grid.addRow(5, new Label("Thời lượng (phút):"), durationField);
         GridPane.setHgrow(titleField, Priority.ALWAYS);
 
@@ -504,8 +508,8 @@ public class AuctionListController implements AutoCloseable {
                 String title = titleField.getText().trim();
                 String desc = descField.getText().trim();
                 String category = categoryBox.getValue();
-                double startingPrice = Double.parseDouble(priceField.getText().trim());
-                double minIncrement = Double.parseDouble(incrementField.getText().trim());
+                double startingPrice = parseVndCurrency(priceField.getText());
+                double minIncrement = parseVndCurrency(incrementField.getText());
                 int duration = Integer.parseInt(durationField.getText().trim());
 
                 if (title.isEmpty() || startingPrice <= 0 || minIncrement <= 0 || duration <= 0) {
@@ -551,5 +555,52 @@ public class AuctionListController implements AutoCloseable {
             case "CANCELED" -> "Đã hủy";
             default -> status;
         };
+    }
+
+    /** Tự động định dạng số nguyên VNĐ khi nhập (ví dụ: 12000 -> 12,000 VNĐ). */
+    private void attachVndFormatter(TextField field) {
+        final boolean[] updating = {false};
+        field.textProperty().addListener((obs, oldText, newText) -> {
+            if (updating[0] || newText == null) {
+                return;
+            }
+            updating[0] = true;
+            try {
+                String working = newText;
+                // Nếu người dùng bấm Backspace xóa vào phần đuôi " VNĐ" thì xóa luôn chữ số cuối
+                if (oldText != null && oldText.endsWith(" VNĐ")
+                        && working.length() < oldText.length()
+                        && working.replaceAll("[^0-9]", "").equals(oldText.replaceAll("[^0-9]", ""))) {
+                    String oldDigits = oldText.replaceAll("[^0-9]", "");
+                    working = oldDigits.isEmpty() ? "" : oldDigits.substring(0, oldDigits.length() - 1);
+                }
+
+                String digits = working.replaceAll("[^0-9]", "");
+                if (digits.isEmpty()) {
+                    field.setText("");
+                } else {
+                    long value = Long.parseLong(digits);
+                    String formatted = String.format(Locale.US, "%,d VNĐ", value);
+                    field.setText(formatted);
+                    Platform.runLater(() -> field.positionCaret(formatted.length() - 4));
+                }
+            } catch (NumberFormatException ignored) {
+                field.setText(oldText == null ? "" : oldText);
+            } finally {
+                updating[0] = false;
+            }
+        });
+    }
+
+    /** Lọc bỏ dấu phẩy và chữ "VNĐ" trước khi chuyển sang double. */
+    private double parseVndCurrency(String text) {
+        if (text == null) {
+            throw new IllegalArgumentException("Giá trị trống");
+        }
+        String cleaned = text.replaceAll("[^0-9.]", "");
+        if (cleaned.isEmpty()) {
+            throw new IllegalArgumentException("Giá trị không hợp lệ");
+        }
+        return Double.parseDouble(cleaned);
     }
 }
