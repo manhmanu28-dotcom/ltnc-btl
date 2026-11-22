@@ -1,6 +1,7 @@
 package com.auction.server.model.entity;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 
 /**
  * BaseEntity: Lớp trừu tượng cơ sở (Abstraction)
@@ -33,5 +34,22 @@ public abstract class BaseEntity {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        BaseEntity that = (BaseEntity) o;
+        return Objects.equals(id, that.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getClass(), id);
     }
 }

@@ -36,6 +36,9 @@ public class Seller extends User {
     }
 
     public void setRating(double rating) {
+        if (!Double.isFinite(rating) || rating < 0.0 || rating > 5.0) {
+            throw new IllegalArgumentException("Điểm uy tín Seller phải nằm trong khoảng 0.0 đến 5.0!");
+        }
         this.rating = rating;
     }
 }

@@ -4,6 +4,7 @@ import com.auction.server.exception.AuctionClosedException;
 import com.auction.server.exception.InvalidBidException;
 import com.auction.server.exception.InvalidStateTransitionException;
 import com.auction.server.model.auction.Auction;
+import com.auction.server.model.auction.AuctionSnapshot;
 import com.auction.server.model.auction.AuctionStatus;
 import com.auction.server.model.auction.BidTransaction;
 import com.auction.server.model.entity.Admin;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -299,6 +301,303 @@ class AuctionConcurrencyTest {
         assertEquals(15_000_000, auction.getCurrentHighestBid());
     }
 
+    @Test
+    @DisplayName("7. Kiểm tra Escrow Hold đa phiên: Không thể dùng 1 số dư để thắng nhiều phiên đồng thời")
+    void testCrossAuctionEscrowPreventsOverCommittingBalance() throws InterruptedException {
+        Auction auction1 = new Auction("AUC-ESC-1", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        Auction auction2 = new Auction("AUC-ESC-2", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        auction1.startAuction();
+        auction2.startAuction();
+
+        Bidder sharedBidder = new Bidder("SHARED-B1", "shared_bidder", "pw", "s@mail.com", 15_000_000);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch gun = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(2);
+        AtomicInteger successes = new AtomicInteger(0);
+        AtomicInteger rejections = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        for (Auction target : new Auction[]{auction1, auction2}) {
+            pool.submit(() -> {
+                ready.countDown();
+                try {
+                    gun.await();
+                    target.placeBid(sharedBidder, 10_000_000);
+                    successes.incrementAndGet();
+                } catch (InvalidBidException e) {
+                    rejections.incrementAndGet();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        ready.await(5, TimeUnit.SECONDS);
+        gun.countDown();
+        assertTrue(done.await(5, TimeUnit.SECONDS));
+        pool.shutdown();
+
+        assertEquals(1, successes.get(), "Chỉ được phép giữ tiền cho 1 phiên vì số dư khả dụng chỉ có 15M!");
+        assertEquals(1, rejections.get());
+        assertEquals(10_000_000, sharedBidder.getHeldBalance());
+        assertEquals(5_000_000, sharedBidder.getAvailableBalance());
+
+        // Khi người khác vượt giá ở phiên đang thắng, tiền tạm giữ được hoàn lại để dùng cho phiên còn lại
+        Auction winningAuction = (auction1.getCurrentWinnerId() != null) ? auction1 : auction2;
+        Auction otherAuction = (winningAuction == auction1) ? auction2 : auction1;
+        Bidder outbidder = new Bidder("OTHER-B2", "other_bidder", "pw", "o@mail.com", 50_000_000);
+        winningAuction.placeBid(outbidder, 11_000_000);
+
+        assertEquals(0, sharedBidder.getHeldBalance());
+        assertEquals(15_000_000, sharedBidder.getAvailableBalance());
+
+        otherAuction.placeBid(sharedBidder, 10_000_000);
+        otherAuction.closeAuction();
+        otherAuction.markAsPaid();
+        assertEquals(5_000_000, sharedBidder.getBalance());
+        assertEquals(0, sharedBidder.getHeldBalance());
+    }
+
+    @Test
+    @DisplayName("8. Kiểm tra chặn NaN/Infinity, Null-safe ItemFactory & Snapshot vòng đời kép")
+    void testSafetyGuardsSnapshotAndLifecycleDoubleTransition() {
+        Auction auction = new Auction("AUC-SAFE", macbookItem, seller.getId(), 500_000,
+                LocalDateTime.now().minusMinutes(10), LocalDateTime.now().minusMinutes(1));
+        List<String> transitions = new ArrayList<>();
+        auction.addObserver(new AuctionObserver() {
+            @Override
+            public void onNewBid(Auction a, BidTransaction tx, boolean timeExtended) {
+            }
+
+            @Override
+            public void onStatusChanged(Auction a, AuctionStatus oldStatus, AuctionStatus newStatus) {
+                transitions.add(oldStatus + "->" + newStatus);
+            }
+        });
+
+        // Nhảy qua cả startTime và endTime trong 1 lần tick phải phát đủ 2 sự kiện chuyển trạng thái
+        auction.checkAndUpdateLifecycle(LocalDateTime.now());
+        assertEquals(List.of("OPEN->RUNNING", "RUNNING->FINISHED"), transitions);
+
+        // Chặn NaN / Infinity
+        Auction live = new Auction("AUC-NAN", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        live.startAuction();
+        Bidder bidder = new Bidder("BNAN", "nan_tester", "pw", "nan@mail.com", 50_000_000);
+        assertThrows(InvalidBidException.class, () -> live.placeBid(bidder, Double.NaN));
+        assertThrows(InvalidBidException.class, () -> live.placeBid(bidder, Double.POSITIVE_INFINITY));
+        assertEquals(10_000_000, live.getCurrentHighestBid());
+
+        AuctionSnapshot snapshot = live.getSnapshot();
+        assertEquals(AuctionStatus.RUNNING, snapshot.getStatus());
+        assertEquals(10_000_000, snapshot.getMinimumNextBid());
+
+        // ItemFactory null-safe & ép kiểu an toàn
+        Item art = ItemFactory.createItem(ItemFactory.ItemType.ART, "ART-SAFE", "Tranh", "Mô tả", 1_000_000, null);
+        assertTrue(art.getSpecificDetails().contains("Khuyết danh"));
+        Item artWithStringFlag = ItemFactory.createItem(ItemFactory.ItemType.ART, "ART-STR", "Tranh 2", "",
+                2_000_000, Map.of("artistName", "Tô Ngọc Vân", "hasCertificate", "true"));
+        assertTrue(artWithStringFlag.getSpecificDetails().contains("Có chứng chỉ"));
+    }
+
+    @Test
+    @DisplayName("9. Kiểm tra quyền hạn Seller/Admin, Self-outbid delta hold & Cancel/Paid State Machine")
+    void testRoleGuardsSelfOutbidAndCancelPaidTransitions() {
+        Auction auction = new Auction("AUC-ROLE", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        auction.startAuction();
+
+        // Không thể thanh toán khi chưa có người thắng
+        Auction emptyFinished = new Auction("AUC-EMPTY", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        emptyFinished.startAuction();
+        emptyFinished.closeAuction();
+        assertThrows(InvalidStateTransitionException.class, emptyFinished::markAsPaid);
+
+        // Seller không thể tự đấu giá trên phiên của chính mình
+        Bidder sellerAsBidder = new Bidder(seller.getId(), "fake_bidder", "pw", "s@mail.com", 50_000_000);
+        assertThrows(InvalidBidException.class, () -> auction.placeBid(sellerAsBidder, 10_000_000));
+
+        // Cho phép self-outbid -> chỉ tạm giữ phần chênh lệch (delta), không giữ trùng
+        auction.setAllowSelfOutbid(true);
+        Bidder bidder = new Bidder("B-SELF", "self_bidder", "pw", "b@mail.com", 20_000_000);
+        auction.placeBid(bidder, 10_000_000);
+        assertEquals(10_000_000, bidder.getHeldBalance());
+        auction.placeBid(bidder, 12_000_000);
+        assertEquals(12_000_000, bidder.getHeldBalance());
+        assertEquals(8_000_000, bidder.getAvailableBalance());
+
+        // Hủy phiên phải hoàn trả toàn bộ tiền đang tạm giữ và chặn bid tiếp theo
+        auction.cancelAuction();
+        assertEquals(AuctionStatus.CANCELED, auction.getStatus());
+        assertEquals(0, bidder.getHeldBalance());
+        assertEquals(20_000_000, bidder.getAvailableBalance());
+        assertThrows(AuctionClosedException.class, () -> auction.placeBid(bidder, 13_000_000));
+        assertThrows(InvalidStateTransitionException.class, auction::markAsPaid);
+    }
+
+    @Test
+    @DisplayName("10. Kiểm tra Auto-Bid fallback khi người dẫn đầu hết số dư khả dụng do thắng phiên khác")
+    void testAutoBidFallbackWhenLeaderSpendsBalanceConcurrently() {
+        Auction auction1 = new Auction("AUC-FB-1", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        Auction auction2 = new Auction("AUC-FB-2", macbookItem, seller.getId(), 500_000, baseStartTime, baseEndTime);
+        auction1.startAuction();
+        auction2.startAuction();
+
+        Bidder bidderA = new Bidder("FB-A", "fb_a", "pw", "a@mail.com", 25_000_000);
+        Bidder bidderC = new Bidder("FB-C", "fb_c", "pw", "c@mail.com", 50_000_000);
+        Bidder bidderD = new Bidder("FB-D", "fb_d", "pw", "d@mail.com", 50_000_000);
+
+        LocalDateTime t1 = baseStartTime.plusMinutes(1);
+        auction1.registerAutoBid(bidderA, 15_000_000, 500_000, t1);
+        assertEquals("FB-A", auction1.getCurrentWinnerId());
+        assertEquals(10_000_000, bidderA.getHeldBalance());
+
+        // Bidder A thắng ở auction2 với 12M -> khả dụng còn lại 3M (không còn đủ hậu thuẫn maxBid 15M ở auction1)
+        auction2.placeBid(bidderA, 12_000_000, t1.plusSeconds(5));
+        assertEquals(22_000_000, bidderA.getHeldBalance());
+
+        // Bidder D đăng ký Auto-Bid max 14M ở auction1, sau đó Bidder C đẩy lên 12M
+        auction1.registerAutoBid(bidderD, 14_000_000, 500_000, t1.plusSeconds(10));
+        auction1.placeBid(bidderC, 12_000_000, t1.plusSeconds(15));
+
+        // Vì bidderA không còn đủ 15M, bidderD phải tiếp quản ngôi đầu ở 12.5M
+        assertEquals("FB-D", auction1.getCurrentWinnerId());
+        assertEquals(12_500_000, auction1.getCurrentHighestBid());
+        assertEquals(12_000_000, bidderA.getHeldBalance()); // Chỉ còn giữ tiền của auction2
+    }
+
+    @Test
+    @DisplayName("11. Stress Test đa phiên + đa luồng: Bảo toàn tổng tiền tạm giữ & Snapshot nhất quán")
+    void testHighContentionMultiAuctionStressTest() throws InterruptedException {
+        int auctionCount = 5;
+        int bidderCount = 20;
+        int threadCount = 80;
+        int opsPerThread = 25;
+
+        List<Auction> auctions = new ArrayList<>();
+        for (int i = 0; i < auctionCount; i++) {
+            Auction a = new Auction("AUC-STRESS-" + i, macbookItem, seller.getId(),
+                    500_000, baseStartTime, baseEndTime);
+            a.startAuction();
+            auctionManager.registerAuction(a);
+            auctions.add(a);
+        }
+
+        List<Bidder> bidders = new ArrayList<>();
+        for (int i = 0; i < bidderCount; i++) {
+            bidders.add(new Bidder("STRESS-B-" + i, "stress_" + i, "pw", "s@mail.com", 40_000_000));
+        }
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch ready = new CountDownLatch(threadCount);
+        CountDownLatch gun = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threadCount);
+        List<Throwable> unexpectedErrors = java.util.Collections.synchronizedList(new ArrayList<>());
+
+        for (int t = 0; t < threadCount; t++) {
+            final int seed = t;
+            pool.submit(() -> {
+                Random rng = new Random(1000L + seed);
+                ready.countDown();
+                try {
+                    gun.await();
+                    for (int op = 0; op < opsPerThread; op++) {
+                        Auction target = auctions.get(rng.nextInt(auctionCount));
+                        Bidder bidder = bidders.get(rng.nextInt(bidderCount));
+                        try {
+                            if (op % 5 == 0) {
+                                double maxBid = 10_000_000 + (rng.nextInt(25) + 1) * 500_000.0;
+                                target.registerAutoBid(bidder, maxBid, 500_000);
+                            } else {
+                                double nextMin = target.getMinimumNextBid();
+                                target.placeBid(bidder, nextMin + rng.nextInt(3) * 500_000.0);
+                            }
+                        } catch (InvalidBidException | AuctionClosedException ignored) {
+                        }
+                        AuctionSnapshot snap = target.getSnapshot();
+                        assertNotNull(snap);
+                        assertTrue(snap.getCurrentHighestBid() >= 10_000_000);
+                    }
+                } catch (Throwable ex) {
+                    unexpectedErrors.add(ex);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        ready.await(5, TimeUnit.SECONDS);
+        gun.countDown();
+        assertTrue(done.await(20, TimeUnit.SECONDS));
+        pool.shutdown();
+        assertTrue(unexpectedErrors.isEmpty(), "Phát hiện lỗi bất ngờ: " + unexpectedErrors);
+
+        // Kiểm chứng toàn vẹn cho từng phiên và bảo toàn tổng tiền giữ cho từng Bidder
+        Map<String, Double> expectedHoldByBidder = new HashMap<>();
+        for (Auction a : auctions) {
+            List<BidTransaction> history = a.getBidHistory();
+            double prev = 0;
+            for (BidTransaction tx : history) {
+                assertTrue(tx.getAmount() > prev, "Giá trong lịch sử phải tăng nghiêm ngặt!");
+                prev = tx.getAmount();
+            }
+            AuctionSnapshot snap = a.getSnapshot();
+            assertEquals(history.size(), snap.getBidCount());
+            assertEquals(a.getCurrentHighestBid(), snap.getCurrentHighestBid());
+            assertEquals(a.getCurrentWinnerId(), snap.getCurrentWinnerId());
+            if (snap.getCurrentWinnerId() != null) {
+                expectedHoldByBidder.merge(snap.getCurrentWinnerId(), snap.getCurrentHighestBid(), Double::sum);
+            }
+        }
+
+        for (Bidder b : bidders) {
+            double expectedHold = expectedHoldByBidder.getOrDefault(b.getId(), 0.0);
+            assertEquals(expectedHold, b.getHeldBalance(), 1e-6,
+                    "Sai lệch tiền tạm giữ cho " + b.getId());
+            assertTrue(b.getHeldBalance() <= b.getBalance() + 1e-6);
+        }
+    }
+
+    @Test
+    @DisplayName("12. Kiểm tra Validation Entity/Item & Cô lập ngoại lệ trong Lifecycle Monitor")
+    void testEntityValidationAndLifecycleMonitorIsolation() {
+        Bidder b1 = new Bidder("SAME-ID", "user_a", "pw", "a@mail.com", 10_000_000);
+        Bidder b1Copy = new Bidder("SAME-ID", "user_a2", "pw", "a2@mail.com", 5_000_000);
+        Seller sSameId = new Seller("SAME-ID", "seller_a", "pw", "s@mail.com");
+        assertEquals(b1, b1Copy);
+        assertNotEquals(b1, sSameId);
+
+        assertThrows(IllegalArgumentException.class, () -> seller.setRating(5.5));
+        assertThrows(IllegalArgumentException.class, () -> seller.setRating(Double.NaN));
+        assertThrows(IllegalArgumentException.class, () -> macbookItem.setStartingPrice(-1));
+        assertThrows(IllegalArgumentException.class, () -> macbookItem.setTitle("   "));
+        assertThrows(IllegalArgumentException.class, () -> macbookItem.calculateShippingFee(-5));
+
+        Item vehicle = ItemFactory.createItem(ItemFactory.ItemType.VEHICLE, "VEH-1", "Xe", "Mô tả", 50_000_000,
+                Map.of("mileage", 12000, "manufactureYear", 2022));
+        assertEquals(750_000, vehicle.calculateShippingFee(10));
+        assertThrows(IllegalArgumentException.class,
+                () -> ItemFactory.createItem(ItemFactory.ItemType.VEHICLE, "VEH-BAD", "Xe", "", 1000,
+                        Map.of("manufactureYear", 1800)));
+
+        // Kiểm tra Lifecycle Monitor không chết khi 1 observer ném RuntimeException
+        auctionManager.addGlobalObserver(new AuctionObserver() {
+            @Override
+            public void onNewBid(Auction a, BidTransaction tx, boolean timeExtended) {
+            }
+
+            @Override
+            public void onStatusChanged(Auction a, AuctionStatus oldStatus, AuctionStatus newStatus) {
+                throw new RuntimeException("Simulated failing observer");
+            }
+        });
+        Auction expired = new Auction("AUC-EXP", macbookItem, seller.getId(), 500_000,
+                LocalDateTime.now().minusMinutes(5), LocalDateTime.now().minusSeconds(1));
+        auctionManager.registerAuction(expired);
+        assertDoesNotThrow(() -> auctionManager.tickLifecycle(LocalDateTime.now()));
+        assertEquals(AuctionStatus.FINISHED, expired.getStatus());
+    }
+
     /**
      * Cho phép chạy trực tiếp toàn bộ JUnit 5 Test Suite từ CLI khi chưa cài Maven toàn cục.
      */
@@ -310,7 +609,13 @@ class AuctionConcurrencyTest {
                 "3. testConcurrentSamePriceBids_OnlyOneSucceeds (50 threads)",
                 "4. testConcurrentCompetingBids_NoLostUpdateOrPriceRollback (100 threads)",
                 "5. testAntiSnipingAlgorithmAndObserverNotification",
-                "6. testAutoBiddingPriorityQueueResolution"
+                "6. testAutoBiddingPriorityQueueResolution",
+                "7. testCrossAuctionEscrowPreventsOverCommittingBalance",
+                "8. testSafetyGuardsSnapshotAndLifecycleDoubleTransition",
+                "9. testRoleGuardsSelfOutbidAndCancelPaidTransitions",
+                "10. testAutoBidFallbackWhenLeaderSpendsBalanceConcurrently",
+                "11. testHighContentionMultiAuctionStressTest",
+                "12. testEntityValidationAndLifecycleMonitorIsolation"
         };
         Runnable[] tests = {
                 suite::testOopPolymorphismAndFactory,
@@ -330,7 +635,25 @@ class AuctionConcurrencyTest {
                     }
                 },
                 suite::testAntiSnipingAlgorithmAndObserverNotification,
-                suite::testAutoBiddingPriorityQueueResolution
+                suite::testAutoBiddingPriorityQueueResolution,
+                () -> {
+                    try {
+                        suite.testCrossAuctionEscrowPreventsOverCommittingBalance();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                suite::testSafetyGuardsSnapshotAndLifecycleDoubleTransition,
+                suite::testRoleGuardsSelfOutbidAndCancelPaidTransitions,
+                suite::testAutoBidFallbackWhenLeaderSpendsBalanceConcurrently,
+                () -> {
+                    try {
+                        suite.testHighContentionMultiAuctionStressTest();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                suite::testEntityValidationAndLifecycleMonitorIsolation
         };
 
         System.out.println("==================================================================");

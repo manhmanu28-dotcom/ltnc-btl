@@ -12,12 +12,15 @@ public abstract class Item extends BaseEntity {
 
     public Item(String id, String title, String description, double startingPrice) {
         super(id);
-        if (startingPrice < 0) {
-            throw new IllegalArgumentException("Giá khởi điểm không thể âm!");
+        setTitle(title);
+        setDescription(description);
+        setStartingPrice(startingPrice);
+    }
+
+    protected static void validateDistance(double distanceKm) {
+        if (!Double.isFinite(distanceKm) || distanceKm < 0.0) {
+            throw new IllegalArgumentException("Khoảng cách vận chuyển (distanceKm) phải là số không âm!");
         }
-        this.title = title;
-        this.description = description;
-        this.startingPrice = startingPrice;
     }
 
     // --- CÁC HÀM ĐA HÌNH (Polymorphism) ---
@@ -47,7 +50,10 @@ public abstract class Item extends BaseEntity {
     }
 
     public void setTitle(String title) {
-        this.title = title;
+        if (title == null || title.trim().isEmpty()) {
+            throw new IllegalArgumentException("Tên sản phẩm (title) không được để trống!");
+        }
+        this.title = title.trim();
     }
 
     public String getDescription() {
@@ -55,7 +61,7 @@ public abstract class Item extends BaseEntity {
     }
 
     public void setDescription(String description) {
-        this.description = description;
+        this.description = (description != null) ? description.trim() : "";
     }
 
     public double getStartingPrice() {
@@ -63,6 +69,9 @@ public abstract class Item extends BaseEntity {
     }
 
     public void setStartingPrice(double startingPrice) {
+        if (!Double.isFinite(startingPrice) || startingPrice < 0.0) {
+            throw new IllegalArgumentException("Giá khởi điểm phải là số hữu hạn không âm!");
+        }
         this.startingPrice = startingPrice;
     }
 }

@@ -11,9 +11,9 @@ public abstract class User extends BaseEntity {
 
     public User(String id, String username, String passwordHash, String email) {
         super(id);
-        this.username = username;
+        setUsername(username);
         this.passwordHash = passwordHash;
-        this.email = email;
+        this.email = (email != null) ? email.trim() : null;
     }
 
     // Các hàm đa hình (Polymorphic Methods) - Mỗi vai trò sẽ có hành vi khác nhau
@@ -33,7 +33,10 @@ public abstract class User extends BaseEntity {
     }
 
     public void setUsername(String username) {
-        this.username = username;
+        if (username == null || username.trim().isEmpty()) {
+            throw new IllegalArgumentException("Tên đăng nhập (username) không được để trống!");
+        }
+        this.username = username.trim();
     }
 
     public String getPasswordHash() {
@@ -49,6 +52,6 @@ public abstract class User extends BaseEntity {
     }
 
     public void setEmail(String email) {
-        this.email = email;
+        this.email = (email != null) ? email.trim() : null;
     }
 }
