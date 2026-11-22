@@ -1,4 +1,4 @@
-﻿package com.auction.client.ui;
+package com.auction.client.ui;
 
 import javafx.animation.Interpolator;
 import javafx.animation.KeyFrame;
