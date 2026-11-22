@@ -28,7 +28,9 @@ public class ClientApplication extends Application {
     public void start(Stage stage) {
         this.stage = stage;
         stage.setTitle("Auction Client");
-        if (getParameters().getRaw().contains("--demo")) {
+        if (getParameters().getRaw().contains("--preview")) {
+            showPreview();
+        } else if (getParameters().getRaw().contains("--demo")) {
             showDemo();
         } else {
             showLogin();
@@ -39,12 +41,49 @@ public class ClientApplication extends Application {
     }
 
     private void showLogin() {
-        authentication = new AuthenticationController(this::showAuctions, this::showDemo);
+        authentication = new AuthenticationController(this::showAuctions, this::showPreview);
         if (stage.getScene() == null) {
             stage.setScene(new Scene(authentication.getView(), 1280, 860));
         } else {
             stage.getScene().setRoot(authentication.getView());
         }
+    }
+
+    private void showPreview() {
+        if (authentication != null) {
+            authentication.close();
+            authentication = null;
+        }
+        if (controller != null) controller.close();
+        controller = AuctionListController.preview();
+        Button room = new Button("Trải nghiệm phòng đấu  →");
+        room.getStyleClass().add("primary-button");
+        room.setOnAction(event -> {
+            controller.close();
+            controller = null;
+            showDemo();
+        });
+        Button back = new Button("Đăng nhập");
+        back.getStyleClass().add("ghost-button");
+        back.setOnAction(event -> {
+            controller.close();
+            controller = null;
+            showLogin();
+        });
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        Label previewBadge = AuctionTheme.label("BẢN XEM UI · DỮ LIỆU MẪU", "feature-pill");
+        HBox nav = new HBox(18, AuctionTheme.brand(), spacer, previewBadge, AuctionTheme.themeToggle(), back, room);
+        nav.setAlignment(Pos.CENTER_LEFT);
+        nav.getStyleClass().add("navbar");
+        BorderPane root = new BorderPane(controller.getView());
+        previewBadge.visibleProperty().bind(root.widthProperty().greaterThan(1200));
+        previewBadge.managedProperty().bind(previewBadge.visibleProperty());
+        root.setTop(nav);
+        AuctionTheme.apply(root);
+        stage.setTitle("Auction · Khám phá giao diện mẫu");
+        if (stage.getScene() == null) stage.setScene(new Scene(root, 1280, 920));
+        else stage.getScene().setRoot(root);
     }
 
     private void showDemo() {
@@ -80,7 +119,7 @@ public class ClientApplication extends Application {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         Label account = AuctionTheme.label(session.username(), "account-chip");
         HBox navigation = new HBox(16, AuctionTheme.brand(),
-                AuctionTheme.label("Sàn đấu giá", "nav-caption"), spacer, account, logout);
+                AuctionTheme.label("Sàn đấu giá", "nav-caption"), spacer, AuctionTheme.themeToggle(), account, logout);
         navigation.setAlignment(Pos.CENTER_LEFT);
         navigation.getStyleClass().add("navbar");
         HBox accountBar = new HBox(navigation);
