@@ -1,6 +1,8 @@
 package com.auction.client.controller;
 
 import com.auction.client.model.AuctionSummary;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuctionListService;
 import com.auction.client.ui.AuctionTheme;
@@ -77,8 +79,8 @@ public class AuctionListController implements AutoCloseable {
     private final TilePane productGrid = new TilePane();
     private final Label emptyMessage = AuctionTheme.label("Chưa có phiên đấu giá. Bấm Tải danh sách để cập nhật.", "muted");
     private AuthenticatedSession session;
-    private final NumberFormat currencyFormat =
-            NumberFormat.getCurrencyInstance(Locale.forLanguageTag("vi-VN"));
+    private final DecimalFormat currencyFormat =
+            new DecimalFormat("#,##0.## 'VNĐ'", DecimalFormatSymbols.getInstance(Locale.US));
 
     public AuctionListController() {
         buildView();
@@ -558,6 +560,7 @@ public class AuctionListController implements AutoCloseable {
     }
 
     /** Tự động định dạng số nguyên VNĐ khi nhập (ví dụ: 12000 -> 12,000 VNĐ). */
+    /** Tự động định dạng số tiền VNĐ khi nhập, hỗ trợ phần thập phân (ví dụ: 1200.12 -> 1,200.12 VNĐ). */
     private void attachVndFormatter(TextField field) {
         final boolean[] updating = {false};
         field.textProperty().addListener((obs, oldText, newText) -> {
@@ -567,20 +570,50 @@ public class AuctionListController implements AutoCloseable {
             updating[0] = true;
             try {
                 String working = newText;
-                // Nếu người dùng bấm Backspace xóa vào phần đuôi " VNĐ" thì xóa luôn chữ số cuối
+                // Nếu người dùng bấm Backspace xóa vào phần đuôi " VNĐ" thì xóa luôn ký tự số/dấu chấm cuối
                 if (oldText != null && oldText.endsWith(" VNĐ")
                         && working.length() < oldText.length()
-                        && working.replaceAll("[^0-9]", "").equals(oldText.replaceAll("[^0-9]", ""))) {
-                    String oldDigits = oldText.replaceAll("[^0-9]", "");
-                    working = oldDigits.isEmpty() ? "" : oldDigits.substring(0, oldDigits.length() - 1);
+                        && working.replaceAll("[^0-9.]", "").equals(oldText.replaceAll("[^0-9.]", ""))) {
+                    String rawOld = oldText.replaceAll("[^0-9.]", "");
+                    working = rawOld.isEmpty() ? "" : rawOld.substring(0, rawOld.length() - 1);
                 }
 
-                String digits = working.replaceAll("[^0-9]", "");
-                if (digits.isEmpty()) {
+                // Chỉ giữ lại chữ số và dấu chấm thập phân đầu tiên
+                StringBuilder cleaned = new StringBuilder();
+                boolean hasDot = false;
+                for (char c : working.toCharArray()) {
+                    if (c >= '0' && c <= '9') {
+                        cleaned.append(c);
+                    } else if (c == '.' && !hasDot) {
+                        cleaned.append(c);
+                        hasDot = true;
+                    }
+                }
+
+                String raw = cleaned.toString();
+                if (raw.isEmpty()) {
                     field.setText("");
                 } else {
-                    long value = Long.parseLong(digits);
-                    String formatted = String.format(Locale.US, "%,d VNĐ", value);
+                    String intPart;
+                    String decPart = "";
+                    int dotIndex = raw.indexOf('.');
+                    if (dotIndex >= 0) {
+                        intPart = raw.substring(0, dotIndex);
+                        decPart = raw.substring(dotIndex + 1);
+                        // Giới hạn tối đa 2 chữ số thập phân
+                        if (decPart.length() > 2) {
+                            decPart = decPart.substring(0, 2);
+                        }
+                    } else {
+                        intPart = raw;
+                    }
+
+                    long intValue = intPart.isEmpty() ? 0 : Long.parseLong(intPart);
+                    String formattedInt = String.format(Locale.US, "%,d", intValue);
+                    String formatted = (dotIndex >= 0)
+                            ? formattedInt + "." + decPart + " VNĐ"
+                            : formattedInt + " VNĐ";
+
                     field.setText(formatted);
                     Platform.runLater(() -> field.positionCaret(formatted.length() - 4));
                 }
