@@ -55,7 +55,7 @@ public final class AuctionDemoController implements AutoCloseable {
         back.setOnAction(event -> onExit.run());
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox nav = new HBox(18, AuctionTheme.brand(), spacer,
+        HBox nav = new HBox(18, AuctionTheme.brand(), spacer, AuctionTheme.themeToggle(),
                 label("DEMO • Dữ liệu mô phỏng", "feature-pill"), back);
         nav.setAlignment(Pos.CENTER_LEFT);
         nav.getStyleClass().add("navbar");
@@ -116,8 +116,8 @@ public final class AuctionDemoController implements AutoCloseable {
         StackPane artwork = new StackPane(illustration);
         artwork.getStyleClass().add("demo-artwork");
         artwork.setMinHeight(220);
-        artwork.setPrefHeight(280);
-        artwork.setMaxHeight(280);
+        artwork.setPrefHeight(340);
+        artwork.setMaxHeight(340);
         illustration.fitWidthProperty().bind(artwork.widthProperty().subtract(40));
         illustration.fitHeightProperty().bind(artwork.heightProperty().subtract(40));
         // Unmanaged images do not affect the frame's preferred layout size.

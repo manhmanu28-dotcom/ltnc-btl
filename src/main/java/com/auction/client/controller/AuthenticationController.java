@@ -4,6 +4,7 @@ import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuthenticationClientService;
 import com.auction.client.ui.AuctionTheme;
 import com.auction.client.ui.PasswordInput;
+import com.auction.client.ui.SkinShowcase;
 import com.auction.server.network.protocol.SocketResponse;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
@@ -21,10 +22,7 @@ import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
-import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
-import javafx.scene.shape.SVGPath;
 
 import static com.auction.client.ui.AuctionTheme.label;
 
@@ -49,6 +47,7 @@ public class AuthenticationController implements AutoCloseable {
     private final PasswordInput confirmationInput = new PasswordInput(confirmation);
     private final Label message = new Label();
     private final VBox formHost = new VBox();
+    private final SkinShowcase skinShowcase = new SkinShowcase();
     private Consumer<Boolean> showForm;
     private final HBox connectionBar;
     private final AuthenticationClientService service = new AuthenticationClientService();
@@ -121,7 +120,7 @@ public class AuthenticationController implements AutoCloseable {
         VBox.setMargin(registrationPrompt, new Insets(8, 0, 0, 0));
         loginForm.getChildren().add(registrationPrompt);
         if (onDemo != null) {
-            Button demoButton = new Button("Xem demo phòng đấu giá →");
+            Button demoButton = new Button("Khám phá giao diện mẫu →");
             demoButton.getStyleClass().add("secondary-button");
             demoButton.setMaxWidth(Double.MAX_VALUE);
             demoButton.setOnAction(event -> onDemo.run());
@@ -166,18 +165,14 @@ public class AuthenticationController implements AutoCloseable {
         card.setPrefWidth(420);
         card.setMaxWidth(440);
 
-        Label heroTitle = label("Khám phá giá trị.\nNắm bắt cơ hội.", "hero-title");
+        Label heroTitle = label("Find your\nnext skin.", "hero-title");
         heroTitle.setWrapText(true);
         heroTitle.setMaxWidth(600);
-        Label description = label("Không gian đấu giá dành cho những lựa chọn của bạn. "
-                + "Tạo tài khoản để bắt đầu khám phá các phiên và sản phẩm trên Auction.", "hero-description");
+        Label description = label("Chọn skin bạn thích. Theo dõi phiên và đặt giá.", "hero-description");
         description.setWrapText(true);
         description.setMaxWidth(520);
-        HBox features = new HBox(8, label("Sản phẩm đa dạng", "feature-pill"),
-                label("Kết nối trực tiếp", "feature-pill"));
-        StackPane illustration = createIllustration();
-        VBox hero = new VBox(22, label("YOUR NEXT FIND STARTS HERE", "eyebrow"),
-                heroTitle, description, features, illustration);
+        VBox hero = new VBox(18, label("AUCTION / SKINS", "eyebrow"),
+                heroTitle, description, skinShowcase);
         hero.getStyleClass().add("hero-panel");
         hero.setMinWidth(0);
         GridPane body = new GridPane();
@@ -195,10 +190,6 @@ public class AuthenticationController implements AutoCloseable {
             GridPane.setColumnIndex(card, compact ? 0 : 1);
             GridPane.setRowIndex(card, compact ? 1 : 0);
             heroTitle.setStyle(compact ? "-fx-font-size: 30px;" : "");
-            illustration.setVisible(!compact);
-            illustration.setManaged(!compact);
-            features.setVisible(!compact);
-            features.setManaged(!compact);
             card.setMaxWidth(compact ? 600 : 440);
         });
         Button signIn = new Button("Đăng nhập");
@@ -209,40 +200,16 @@ public class AuthenticationController implements AutoCloseable {
         signUp.setOnAction(event -> { showForm.accept(true); registerName.requestFocus(); });
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox navigation = new HBox(12, AuctionTheme.brand(), spacer, signIn, signUp);
+        HBox navigation = new HBox(12, AuctionTheme.brand(), spacer, AuctionTheme.themeToggle(), signIn, signUp);
         navigation.setAlignment(Pos.CENTER_LEFT);
         navigation.getStyleClass().add("navbar");
         view.getStyleClass().add("auth-page");
         view.setAlignment(Pos.TOP_CENTER);
         view.getChildren().addAll(navigation, body,
-                label("AUCTION  /  Khám phá · Lựa chọn · Tham gia", "hero-footer"));
+                label("Auction · Đấu giá trực tuyến", "hero-footer"));
         scrollPane.setFitToWidth(true);
         scrollPane.getStyleClass().add("auth-scroll");
         AuctionTheme.apply(scrollPane);
-    }
-
-    private StackPane createIllustration() {
-        VBox back = new VBox();
-        back.getStyleClass().addAll("ticket", "ticket-back");
-        back.setMaxSize(320, 190);
-        back.setRotate(7);
-        back.setTranslateX(20);
-        SVGPath curve = new SVGPath();
-        curve.setContent("M 0 55 L 32 55 L 32 42 L 78 42 L 78 30 L 134 30 L 134 18 L 200 18 L 200 0 L 264 0");
-        curve.setFill(Color.TRANSPARENT);
-        curve.setStroke(Color.web("#5799ff"));
-        curve.setStrokeWidth(3);
-        VBox ticket = new VBox(12, label("KHÁM PHÁ TRÊN AUCTION", "eyebrow"),
-                label("Mỗi lựa chọn, một giá trị.", "ticket-title"), curve,
-                label("Hành trình bắt đầu từ bạn", "muted"));
-        ticket.getStyleClass().add("ticket");
-        ticket.setMaxSize(320, 190);
-        ticket.setRotate(-4);
-        StackPane stack = new StackPane(back, ticket);
-        stack.setPrefHeight(235);
-        stack.setMaxWidth(420);
-        stack.getStyleClass().add("ticket-stack");
-        return stack;
     }
 
     public Parent getView() {
@@ -333,6 +300,7 @@ public class AuthenticationController implements AutoCloseable {
             return;
         }
         closed = true;
+        skinShowcase.close();
         clearPasswords();
         if (pendingTask != null) {
             pendingTask.cancel(true);

@@ -26,6 +26,11 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.TitledPane;
+import javafx.collections.ListChangeListener;
+import javafx.scene.layout.TilePane;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -67,6 +72,9 @@ public class AuctionListController implements AutoCloseable {
     private Task<List<AuctionSummary>> loadTask;
     private boolean loading;
     private boolean closed;
+    private boolean previewMode;
+    private final TilePane productGrid = new TilePane();
+    private final Label emptyMessage = AuctionTheme.label("Chưa có phiên đấu giá. Bấm Tải danh sách để cập nhật.", "muted");
     private AuthenticatedSession session;
     private final NumberFormat currencyFormat =
             NumberFormat.getCurrencyInstance(Locale.forLanguageTag("vi-VN"));
@@ -89,9 +97,33 @@ public class AuctionListController implements AutoCloseable {
         return view;
     }
 
+    /** Bản xem UI độc lập, không gọi mạng hoặc tạo giao dịch. */
+    public static AuctionListController preview() {
+        AuctionListController controller = new AuctionListController();
+        controller.previewMode = true;
+        controller.reloadButton.setDisable(true);
+        controller.createAuctionButton.setDisable(true);
+        controller.hostField.setDisable(true);
+        controller.portField.setDisable(true);
+        controller.connectionLabel.setText("BẢN XEM GIAO DIỆN · Tất cả sản phẩm và mức giá dưới đây là dữ liệu mẫu.");
+        controller.auctions.setAll(
+                new AuctionSummary("DEMO-01", "Phố cổ trong nắng", 5000000, "RUNNING"),
+                new AuctionSummary("DEMO-02", "Đồng hồ cổ điển", 12500000, "RUNNING"),
+                new AuctionSummary("DEMO-03", "Máy ảnh film 35mm", 2800000, "OPEN"),
+                new AuctionSummary("DEMO-04", "Bình gốm thủ công", 1500000, "OPEN"),
+                new AuctionSummary("DEMO-05", "Góc phố mùa thu", 7200000, "RUNNING"),
+                new AuctionSummary("DEMO-06", "Bộ sưu tập giới hạn", 3200000, "FINISHED"));
+        controller.totalCount.setText("6");
+        controller.runningCount.setText("3");
+        controller.openCount.setText("2");
+        return controller;
+    }
+
     private void buildView() {
-        Label title = AuctionTheme.label("Khám phá phiên đấu giá", "market-title");
-        Label subtitle = AuctionTheme.label("Tìm sản phẩm bạn quan tâm. Chọn phiên để xem thông tin chi tiết.", "muted");
+        Label title = AuctionTheme.label("Tìm thấy điều đặc biệt.", "market-title");
+        title.setMinWidth(0);
+        title.setWrapText(true);
+        Label subtitle = AuctionTheme.label("Khám phá những món đồ có câu chuyện. Bắt đầu phiên đấu giá của bạn hôm nay.", "muted");
         subtitle.setWrapText(true);
 
         connectionLabel.getStyleClass().add("muted");
@@ -136,10 +168,28 @@ public class AuctionListController implements AutoCloseable {
         searchField.textProperty().addListener((observable, before, value) -> filterAuctions());
         statusFilter.valueProperty().addListener((observable, before, value) -> filterAuctions());
         HBox filters = new HBox(12, searchField, statusFilter);
-        VBox header = new VBox(16, heading, subtitle, statistics, filters, connectionBar, connectionLabel);
+        TitledPane connectionSettings = new TitledPane("Cài đặt kết nối", connectionBar);
+        connectionSettings.setExpanded(false);
+        connectionSettings.getStyleClass().add("connection-options");
+        VBox header = new VBox(14, AuctionTheme.label("KHÁM PHÁ / PHIÊN ĐẤU GIÁ", "eyebrow"), heading, subtitle, statistics, filters, connectionSettings, connectionLabel);
         BorderPane.setMargin(header, new Insets(0, 0, 20, 0));
 
         configureTable();
+        productGrid.setHgap(20);
+        productGrid.setVgap(20);
+        productGrid.setPrefTileWidth(300);
+        productGrid.setTileAlignment(Pos.TOP_LEFT);
+        productGrid.setPadding(new Insets(2, 4, 16, 2));
+        ScrollPane products = new ScrollPane(productGrid);
+        products.setFitToWidth(true);
+        products.viewportBoundsProperty().addListener((observable, before, bounds) -> {
+            double available = Math.max(280, bounds.getWidth() - 24);
+            int columns = Math.max(1, (int) ((available + 20) / 340));
+            productGrid.setPrefTileWidth((available - (columns - 1) * 20) / columns);
+        });
+        products.getStyleClass().add("auth-scroll");
+        filteredAuctions.addListener((ListChangeListener<AuctionSummary>) change -> renderProducts());
+        renderProducts();
 
         enterRoomButton.setDisable(true);
         enterRoomButton.setOnAction(event -> showSelectedAuction());
@@ -159,9 +209,52 @@ public class AuctionListController implements AutoCloseable {
 
         view.getStyleClass().add("market-page");
         view.setTop(header);
-        view.setCenter(auctionTable);
-        view.setBottom(footer);
+        view.setCenter(products);
         AuctionTheme.apply(view);
+    }
+
+    private void renderProducts() {
+        productGrid.getChildren().clear();
+        if (filteredAuctions.isEmpty()) {
+            productGrid.getChildren().add(emptyMessage);
+            return;
+        }
+        int index = 0;
+        for (AuctionSummary auction : filteredAuctions) {
+            StackPane artwork = new StackPane();
+            artwork.getStyleClass().addAll("product-art", "product-art-" + (index++ % 3));
+            if (previewMode) {
+                artwork.getChildren().add(com.auction.client.ui.ProductArtwork.create(auction.itemTitle()));
+            } else {
+                artwork.getChildren().add(AuctionTheme.label("Ảnh sản phẩm chưa được cung cấp", "muted"));
+            }
+            Label badge = AuctionTheme.label(statusText(auction.status()), "product-badge");
+            badge.getStyleClass().add(switch (auction.status()) {
+                case "RUNNING", "PAID" -> "status-running";
+                case "OPEN" -> "status-open";
+                default -> "status-finished";
+            });
+            Label title = AuctionTheme.label(auction.itemTitle(), "product-title");
+            title.setWrapText(true);
+            title.setMinHeight(48);
+            Button inspect = new Button("Xem phiên  →");
+            inspect.getStyleClass().add("secondary-button");
+            inspect.setMaxWidth(Double.MAX_VALUE);
+            inspect.setOnAction(event -> {
+                auctionTable.getSelectionModel().select(auction);
+                showSelectedAuction();
+            });
+            VBox details = new VBox(10, badge, title,
+                    AuctionTheme.label("Giá hiện tại", "muted"),
+                    AuctionTheme.label(currencyFormat.format(auction.currentHighestBid()), "product-price"),
+                    AuctionTheme.label(auction.auctionId() + (previewMode ? " · Minh họa mẫu" : ""), "form-hint"), inspect);
+            details.getStyleClass().add("product-details");
+            VBox card = new VBox(artwork, details);
+            card.prefWidthProperty().bind(productGrid.prefTileWidthProperty());
+            card.maxWidthProperty().bind(productGrid.prefTileWidthProperty());
+            card.getStyleClass().add("product-card");
+            productGrid.getChildren().add(card);
+        }
     }
 
     private VBox summaryCard(String caption, Label value) {
@@ -183,6 +276,9 @@ public class AuctionListController implements AutoCloseable {
     }
 
     private void updateEmptyState() {
+        emptyMessage.setText(auctions.isEmpty()
+                ? "Chưa có phiên đấu giá. Bấm Tải danh sách để cập nhật."
+                : "Không có phiên phù hợp. Thử từ khóa hoặc trạng thái khác.");
         auctionTable.setPlaceholder(new Label(auctions.isEmpty()
                 ? "Chưa có phiên đấu giá. Bấm Tải danh sách để cập nhật."
                 : "Không có phiên phù hợp. Thử từ khóa hoặc trạng thái khác."));
@@ -271,6 +367,7 @@ public class AuctionListController implements AutoCloseable {
         runningCount.setText("0");
         openCount.setText("0");
         auctionTable.setPlaceholder(new Label("Đang tải danh sách…"));
+        emptyMessage.setText("Đang tải các phiên đấu giá…");
         connectionLabel.setText("Đang tải từ " + host + ":" + port + "…");
 
         loadTask = new Task<>() {
@@ -305,6 +402,7 @@ public class AuctionListController implements AutoCloseable {
                     + (detail == null ? error.getClass().getSimpleName() : detail)
                     + ". Kiểm tra server rồi thử lại.");
             auctionTable.setPlaceholder(new Label("Không tải được dữ liệu. Hãy thử lại."));
+            emptyMessage.setText("Không tải được dữ liệu. Bấm Tải danh sách để thử lại.");
             setLoading(false);
         });
         networkExecutor.execute(loadTask);
