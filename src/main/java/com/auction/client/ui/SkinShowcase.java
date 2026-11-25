@@ -6,16 +6,10 @@ import javafx.animation.KeyValue;
 import javafx.animation.PauseTransition;
 import javafx.animation.Timeline;
 import javafx.geometry.Insets;
-import javafx.geometry.Pos;
 import javafx.geometry.Rectangle2D;
-import javafx.scene.control.Button;
-import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
-import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
@@ -24,15 +18,12 @@ import javafx.util.Duration;
 import java.util.Objects;
 
 /** Two stacked skin cards that move vertically, with local image resources. */
-public final class SkinShowcase extends VBox implements AutoCloseable {
+public final class SkinShowcase extends VBox implements AutoCloseable, ThemePausable {
     private final StackPane[] cards = new StackPane[2];
     private static final Interpolator SNAP = Interpolator.SPLINE(0.16, 1, 0.3, 1);
     private final PauseTransition hold = new PauseTransition(Duration.seconds(4));
     private final Timeline slide = new Timeline();
-    private final Label position = AuctionTheme.label("01 / 02", "skin-position");
-    private final Button previous = control("↑", "Thẻ trước", "skin-previous");
-    private final Button next = control("↓", "Thẻ tiếp theo", "skin-next");
-    private boolean paused;
+    private int themePauses;
     private boolean transitioning;
     private boolean closed;
     private int active;
@@ -58,22 +49,6 @@ public final class SkinShowcase extends VBox implements AutoCloseable {
         deck.setClip(clip);
         arrangeCards();
 
-        Button pause = control("Ⅱ", "Tạm dừng chuyển thẻ", "skin-pause");
-        pause.setOnAction(event -> {
-            paused = !paused;
-            pause.setText(paused ? "▶" : "Ⅱ");
-            String action = paused ? "Tiếp tục chuyển thẻ" : "Tạm dừng chuyển thẻ";
-            pause.setAccessibleText(action);
-            pause.getTooltip().setText(action);
-            updatePlayback();
-        });
-        previous.setOnAction(event -> changeCard(1));
-        next.setOnAction(event -> changeCard(-1));
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox caption = new HBox(8, AuctionTheme.label("SKIN GALLERY", "eyebrow"), spacer,
-                position, previous, next, pause);
-        caption.setAlignment(Pos.CENTER_LEFT);
         ProgressBar progress = new ProgressBar(0);
         progress.getStyleClass().add("skin-progress");
         progress.setMaxWidth(Double.MAX_VALUE);
@@ -81,16 +56,13 @@ public final class SkinShowcase extends VBox implements AutoCloseable {
         progress.progressProperty().bind(javafx.beans.binding.Bindings.createDoubleBinding(
                 () -> hold.getCurrentTime().toMillis() / hold.getDuration().toMillis(),
                 hold.currentTimeProperty()));
-        getChildren().addAll(deck, progress, caption);
+        getChildren().addAll(deck, progress, AuctionTheme.label("SKIN GALLERY", "eyebrow"));
 
         hold.setOnFinished(event -> changeCard(-1));
         slide.setOnFinished(event -> {
             active = 1 - active;
             transitioning = false;
             arrangeCards();
-            position.setText(active == 0 ? "01 / 02" : "02 / 02");
-            previous.setDisable(false);
-            next.setDisable(false);
             hold.stop();
             updatePlayback();
         });
@@ -111,11 +83,9 @@ public final class SkinShowcase extends VBox implements AutoCloseable {
     }
 
     private void changeCard(int direction) {
-        if (closed || transitioning || getScene() == null) return;
+        if (closed || transitioning || themePauses > 0 || getScene() == null) return;
         hold.stop();
         transitioning = true;
-        previous.setDisable(true);
-        next.setDisable(true);
         StackPane outgoing = cards[active];
         StackPane incoming = cards[1 - active];
         incoming.setTranslateY(-direction * 24);
@@ -145,15 +115,6 @@ public final class SkinShowcase extends VBox implements AutoCloseable {
                 new KeyFrame(Duration.millis(540),
                         value(incoming.translateYProperty(), 0)));
         slide.playFromStart();
-    }
-
-    private static Button control(String text, String description, String id) {
-        Button button = new Button(text);
-        button.setId(id);
-        button.getStyleClass().addAll("ghost-button", "skin-playback");
-        button.setAccessibleText(description);
-        button.setTooltip(new Tooltip(description));
-        return button;
     }
 
     private static KeyValue value(javafx.beans.value.WritableValue<Number> property, double number) {
@@ -202,13 +163,23 @@ public final class SkinShowcase extends VBox implements AutoCloseable {
     }
 
     private void updatePlayback() {
-        if (closed || paused || !isVisible() || getScene() == null) {
+        if (closed || themePauses > 0 || !isVisible() || getScene() == null) {
             hold.pause(); slide.pause();
         } else if (transitioning) {
             slide.play();
         } else {
             hold.play();
         }
+    }
+
+    @Override public void pauseForTheme() {
+        themePauses++;
+        updatePlayback();
+    }
+
+    @Override public void resumeAfterTheme() {
+        if (themePauses > 0) themePauses--;
+        updatePlayback();
     }
 
     @Override public void close() {

@@ -13,6 +13,7 @@ import javafx.util.Duration;
 /** Hover and press feedback, including controls added by dialogs or filters. */
 final class ButtonMotion {
     private static final Object INSTALLED = new Object();
+    private static final Interpolator EASE = Interpolator.SPLINE(0.2, 0.8, 0.2, 1);
 
     private ButtonMotion() { }
 
@@ -23,12 +24,15 @@ final class ButtonMotion {
             Runnable update = () -> {
                 motion.stop();
                 boolean active = !button.isDisabled() && button.getScene() != null;
-                double scale = !active ? 1 : button.isPressed() ? 0.97 : button.isHover() ? 1.025 : 1;
-                double lift = active && button.isHover() && !button.isPressed() ? -1.5 : 0;
-                motion.getKeyFrames().setAll(new KeyFrame(Duration.millis(140),
-                        new KeyValue(button.scaleXProperty(), scale, Interpolator.EASE_OUT),
-                        new KeyValue(button.scaleYProperty(), scale, Interpolator.EASE_OUT),
-                        new KeyValue(button.translateYProperty(), lift, Interpolator.EASE_OUT)));
+                boolean icon = button.getStyleClass().contains("theme-toggle");
+                double scale = !active ? 1 : button.isPressed() ? 0.94 : button.isHover() ? (icon ? 1.07 : 1.018) : 1;
+                double lift = active && button.isHover() && !button.isPressed() ? -1 : 0;
+                double rotation = active && icon && button.isHover() && !button.isPressed() ? -12 : 0;
+                motion.getKeyFrames().setAll(new KeyFrame(Duration.millis(button.isPressed() ? 85 : 180),
+                        new KeyValue(button.scaleXProperty(), scale, EASE),
+                        new KeyValue(button.scaleYProperty(), scale, EASE),
+                        new KeyValue(button.translateYProperty(), lift, EASE),
+                        new KeyValue(button.rotateProperty(), rotation, EASE)));
                 motion.playFromStart();
             };
             button.hoverProperty().addListener((o, a, b) -> update.run());
@@ -37,7 +41,7 @@ final class ButtonMotion {
             button.sceneProperty().addListener((o, a, b) -> {
                 if (b == null) {
                     motion.stop();
-                    button.setScaleX(1); button.setScaleY(1); button.setTranslateY(0);
+                    button.setScaleX(1); button.setScaleY(1); button.setTranslateY(0); button.setRotate(0);
                 }
             });
         }
