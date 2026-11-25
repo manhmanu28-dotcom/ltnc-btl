@@ -5,6 +5,7 @@ import com.auction.server.service.AuctionManager;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
@@ -30,10 +31,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class AuctionServer implements Closeable {
 
+    public static final String DEFAULT_BIND_ADDRESS = "0.0.0.0";
     public static final int DEFAULT_PORT = 8888;
     public static final int DEFAULT_CORE_POOL_SIZE = 16;
     public static final int DEFAULT_MAX_POOL_SIZE = 128;
 
+    private final String bindAddress;
     private final int configuredPort;
     private final AuctionManager auctionManager;
     private final SocketBroadcastManager broadcastManager;
@@ -45,17 +48,28 @@ public class AuctionServer implements Closeable {
     private Thread acceptorThread;
 
     public AuctionServer() {
-        this(DEFAULT_PORT);
+        this(DEFAULT_BIND_ADDRESS, DEFAULT_PORT);
     }
 
     public AuctionServer(int port) {
-        this(port, DEFAULT_CORE_POOL_SIZE, DEFAULT_MAX_POOL_SIZE);
+        this(DEFAULT_BIND_ADDRESS, port, DEFAULT_CORE_POOL_SIZE, DEFAULT_MAX_POOL_SIZE);
+    }
+
+    public AuctionServer(String bindAddress, int port) {
+        this(bindAddress, port, DEFAULT_CORE_POOL_SIZE, DEFAULT_MAX_POOL_SIZE);
     }
 
     public AuctionServer(int port, int corePoolSize, int maxPoolSize) {
+        this(DEFAULT_BIND_ADDRESS, port, corePoolSize, maxPoolSize);
+    }
+
+    public AuctionServer(String bindAddress, int port, int corePoolSize, int maxPoolSize) {
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("Cổng mạng (port) phải nằm trong khoảng 0..65535!");
         }
+        this.bindAddress = (bindAddress != null && !bindAddress.trim().isEmpty())
+                ? bindAddress.trim()
+                : DEFAULT_BIND_ADDRESS;
         this.configuredPort = port;
         this.auctionManager = AuctionManager.getInstance();
         this.broadcastManager = new SocketBroadcastManager();
@@ -88,7 +102,10 @@ public class AuctionServer implements Closeable {
         if (this.running.get()) {
             return;
         }
-        this.serverSocket = new ServerSocket(this.configuredPort);
+        this.serverSocket = new ServerSocket(
+                this.configuredPort,
+                50,
+                InetAddress.getByName(this.bindAddress));
         this.running.set(true);
 
         // Đăng ký Observer để mọi sự kiện từ AuctionManager tự động Broadcast qua Socket
@@ -105,6 +122,7 @@ public class AuctionServer implements Closeable {
             try {
                 Socket clientSocket = this.serverSocket.accept();
                 clientSocket.setTcpNoDelay(true);
+                clientSocket.setKeepAlive(true);
                 ClientHandler handler = new ClientHandler(
                         clientSocket,
                         this.auctionManager,
@@ -154,6 +172,18 @@ public class AuctionServer implements Closeable {
             return this.serverSocket.getLocalPort();
         }
         return this.configuredPort;
+    }
+
+    public String getBindAddress() {
+        return this.bindAddress;
+    }
+
+    public int getConnectedClientCount() {
+        return this.broadcastManager.getConnectedClientCount();
+    }
+
+    public int getAuctionCount() {
+        return this.auctionManager.getAllAuctions().size();
     }
 
     public boolean isRunning() {

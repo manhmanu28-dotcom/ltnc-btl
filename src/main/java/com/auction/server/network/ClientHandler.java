@@ -132,7 +132,9 @@ public class ClientHandler implements Runnable, Closeable {
         switch (action) {
             case PING:
                 return SocketResponse.ok(request, "PONG")
-                        .putData("clientId", clientId);
+                        .putData("clientId", clientId)
+                        .putData("auctionCount", auctionManager.getAllAuctions().size())
+                        .putData("connectedClients", broadcastManager.getConnectedClientCount());
 
             case LOGIN:
                 return handleLogin(request);
