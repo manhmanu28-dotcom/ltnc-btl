@@ -5,6 +5,9 @@ import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuctionListService;
+import com.auction.client.service.SkinCatalog;
+import com.auction.client.ui.SkinPicker;
+import com.auction.client.ui.SkinPromoBanner;
 import com.auction.client.ui.AuctionTheme;
 import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
@@ -41,7 +44,6 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.TilePane;
 import javafx.scene.layout.VBox;
 
-import java.text.NumberFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -77,6 +79,7 @@ public class AuctionListController implements AutoCloseable {
     private boolean closed;
     private boolean previewMode;
     private final TilePane productGrid = new TilePane();
+    private final SkinPromoBanner promoBanner = new SkinPromoBanner();
     private final Label emptyMessage = AuctionTheme.label("Chưa có phiên đấu giá. Bấm Tải danh sách để cập nhật.", "muted");
     private AuthenticatedSession session;
     private final DecimalFormat currencyFormat =
@@ -105,7 +108,7 @@ public class AuctionListController implements AutoCloseable {
         AuctionListController controller = new AuctionListController();
         controller.previewMode = true;
         controller.reloadButton.setDisable(true);
-        controller.createAuctionButton.setDisable(true);
+        controller.createAuctionButton.setText("+ Xem thử đăng bán skin");
         controller.hostField.setDisable(true);
         controller.portField.setDisable(true);
         controller.connectionLabel.setText("BẢN XEM GIAO DIỆN · Tất cả sản phẩm và mức giá dưới đây là dữ liệu mẫu.");
@@ -175,7 +178,6 @@ public class AuctionListController implements AutoCloseable {
         connectionSettings.setExpanded(false);
         connectionSettings.getStyleClass().add("connection-options");
         VBox header = new VBox(14, AuctionTheme.label("KHÁM PHÁ / PHIÊN ĐẤU GIÁ", "eyebrow"), heading, subtitle, statistics, filters, connectionSettings, connectionLabel);
-        BorderPane.setMargin(header, new Insets(0, 0, 20, 0));
 
         configureTable();
         productGrid.setHgap(20);
@@ -183,7 +185,9 @@ public class AuctionListController implements AutoCloseable {
         productGrid.setPrefTileWidth(300);
         productGrid.setTileAlignment(Pos.TOP_LEFT);
         productGrid.setPadding(new Insets(2, 4, 16, 2));
-        ScrollPane products = new ScrollPane(productGrid);
+        VBox marketContent = new VBox(24, promoBanner, header, productGrid);
+        marketContent.setFillWidth(true);
+        ScrollPane products = new ScrollPane(marketContent);
         products.setFitToWidth(true);
         products.viewportBoundsProperty().addListener((observable, before, bounds) -> {
             double available = Math.max(280, bounds.getWidth() - 24);
@@ -211,7 +215,6 @@ public class AuctionListController implements AutoCloseable {
         BorderPane.setMargin(footer, new Insets(16, 0, 0, 0));
 
         view.getStyleClass().add("market-page");
-        view.setTop(header);
         view.setCenter(products);
         AuctionTheme.apply(view);
     }
@@ -226,7 +229,10 @@ public class AuctionListController implements AutoCloseable {
         for (AuctionSummary auction : filteredAuctions) {
             StackPane artwork = new StackPane();
             artwork.getStyleClass().addAll("product-art", "product-art-" + (index++ % 3));
-            if (previewMode) {
+            var catalogSkin = SkinCatalog.findByTitle(auction.itemTitle());
+            if (catalogSkin.isPresent()) {
+                artwork.getChildren().add(SkinPicker.image(catalogSkin.get(), 260, 160));
+            } else if (previewMode) {
                 artwork.getChildren().add(com.auction.client.ui.ProductArtwork.create(auction.itemTitle()));
             } else {
                 artwork.getChildren().add(AuctionTheme.label("Ảnh sản phẩm chưa được cung cấp", "muted"));
@@ -424,6 +430,7 @@ public class AuctionListController implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        promoBanner.close();
         if (loadTask != null) {
             loadTask.cancel(true);
         }
@@ -450,7 +457,7 @@ public class AuctionListController implements AutoCloseable {
     }
 
     private void showCreateAuctionDialog() {
-        if (session == null) {
+        if (session == null && !previewMode) {
             Alert alert = new Alert(Alert.AlertType.WARNING, "Vui lòng đăng nhập để đăng bán sản phẩm.");
             AuctionTheme.apply(alert.getDialogPane());
             alert.initOwner(view.getScene().getWindow());
@@ -459,24 +466,27 @@ public class AuctionListController implements AutoCloseable {
         }
 
         Dialog<ButtonType> dialog = new Dialog<>();
-        dialog.setTitle("Đăng bán sản phẩm mới");
-        dialog.setHeaderText("Nhập thông tin vật phẩm để mở phiên đấu giá (Bạn sẽ là Seller của phiên này)");
+        dialog.setTitle(previewMode ? "Xem thử đăng bán skin" : "Đăng bán skin");
+        dialog.setHeaderText("Chọn danh mục, chọn skin rồi nhập thông tin đăng bán.");
+        dialog.setResizable(true);
+        dialog.getDialogPane().setPrefWidth(940);
         dialog.initOwner(view.getScene().getWindow());
         AuctionTheme.apply(dialog.getDialogPane());
 
-        ButtonType submitType = new ButtonType("Tạo phiên đấu giá", ButtonBar.ButtonData.OK_DONE);
+        ButtonType submitType = new ButtonType(previewMode ? "Hoàn tất bản xem" : "Tạo phiên đấu giá", ButtonBar.ButtonData.OK_DONE);
         dialog.getDialogPane().getButtonTypes().addAll(submitType, ButtonType.CANCEL);
 
         TextField titleField = new TextField();
-        titleField.setPromptText("Ví dụ: MacBook Pro M3");
-
-        ComboBox<String> categoryBox = new ComboBox<>();
-        categoryBox.getItems().addAll("ELECTRONICS", "ART", "VEHICLE");
-        categoryBox.setValue("ELECTRONICS");
-        categoryBox.setMaxWidth(Double.MAX_VALUE);
+        titleField.setId("auction-skin-title");
+        titleField.setPromptText("Chọn một skin từ danh mục phía trên");
+        titleField.setEditable(false);
+        SkinPicker picker = new SkinPicker();
+        picker.selectedSkinProperty().addListener((observable, before, skin) ->
+                titleField.setText(skin == null ? "" : skin.name()));
+        dialog.getDialogPane().lookupButton(submitType).disableProperty().bind(picker.selectedSkinProperty().isNull());
 
         TextArea descField = new TextArea();
-        descField.setPromptText("Mô tả tình trạng, phụ kiện đi kèm...");
+        descField.setPromptText("Mô tả tình trạng, độ hao mòn, sticker và thông tin khác…");
         descField.setPrefRowCount(3);
 
         TextField priceField = new TextField();
@@ -493,23 +503,39 @@ public class AuctionListController implements AutoCloseable {
         grid.setVgap(10);
         grid.setPadding(new Insets(16, 16, 8, 16));
         grid.addRow(0, new Label("Tên sản phẩm:"), titleField);
-        grid.addRow(1, new Label("Danh mục:"), categoryBox);
-        grid.addRow(2, new Label("Mô tả:"), descField);
-        grid.addRow(3, new Label("Giá khởi điểm (VNĐ):"), priceField);
-        grid.addRow(4, new Label("Bước giá tối thiểu (VNĐ):"), incrementField);
-        grid.addRow(5, new Label("Thời lượng (phút):"), durationField);
+        grid.addRow(1, new Label("Mô tả:"), descField);
+        grid.addRow(2, new Label("Giá khởi điểm (VNĐ):"), priceField);
+        grid.addRow(3, new Label("Bước giá tối thiểu (VNĐ):"), incrementField);
+        grid.addRow(4, new Label("Thời lượng (phút):"), durationField);
         GridPane.setHgrow(titleField, Priority.ALWAYS);
 
-        dialog.getDialogPane().setContent(grid);
+        Label source = AuctionTheme.label("Danh mục mẫu gồm " + SkinCatalog.all().size()
+                + " skin · Ảnh tham khảo: CSGOSKINS.GG", "form-hint");
+        source.setWrapText(true);
+        VBox form = new VBox(16, picker, source, grid);
+        ScrollPane content = new ScrollPane(form);
+        content.setFitToWidth(true);
+        content.setPrefViewportHeight(590);
+        content.getStyleClass().add("auth-scroll");
+        dialog.getDialogPane().setContent(content);
 
         dialog.showAndWait().ifPresent(result -> {
             if (result != submitType) {
                 return;
             }
+            if (previewMode) {
+                connectionLabel.setText("Đã chọn " + picker.getSelectedSkin().name()
+                        + " trong bản xem. Đăng nhập để đăng bán thật.");
+                return;
+            }
             try {
                 String title = titleField.getText().trim();
-                String desc = descField.getText().trim();
-                String category = categoryBox.getValue();
+                var skin = picker.getSelectedSkin();
+                String desc = "Skin CS2 · " + skin.group() + " / " + skin.weapon()
+                        + "\n" + descField.getText().trim();
+                // Existing server supports ART, ELECTRONICS and VEHICLE. Keep the
+                // skin subgroup in the description until a dedicated server type is added.
+                String category = "ART";
                 double startingPrice = parseVndCurrency(priceField.getText());
                 double minIncrement = parseVndCurrency(incrementField.getText());
                 int duration = Integer.parseInt(durationField.getText().trim());

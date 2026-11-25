@@ -69,8 +69,6 @@
 .skin-frame { -fx-background-color: -auction-neutral; -fx-background-radius: 12; }
 .skin-card { -fx-border-color: -auction-border-strong; -fx-border-width: 1; -fx-border-radius: 12; }
 .skin-showcase { -fx-padding: 8 0 0 0; }
-.skin-position { -fx-text-fill: -auction-muted; -fx-font-size: 12px; -fx-font-family: "Consolas"; }
-.skin-playback { -fx-min-width: 30; -fx-pref-width: 30; -fx-min-height: 30; -fx-padding: 4; -fx-font-size: 13px; }
 .skin-progress { -fx-min-height: 3; -fx-pref-height: 3; -fx-max-height: 3; -fx-padding: 0; }
 .skin-progress > .track { -fx-background-color: -auction-border; -fx-background-radius: 3; -fx-background-insets: 0; }
 .skin-progress > .bar { -fx-background-color: -auction-accent; -fx-background-radius: 3; -fx-background-insets: 0; -fx-padding: 0; }
@@ -231,7 +229,7 @@
 .demo-price { -fx-font-size: 34px; -fx-text-fill: -auction-text; }
 .demo-clock { -fx-font-size: 30px; -fx-font-family: "Consolas"; }
 .demo-card .primary-button { -fx-padding: 15 20; -fx-font-size: 14px; }
-.text-area { -fx-text-fill: -auction-text; -fx-control-inner-background: -auction-input; }
+.text-area { -fx-text-fill: -auction-text; -fx-prompt-text-fill: -auction-muted; -fx-control-inner-background: -auction-input; }
 .text-area .content { -fx-background-color: -auction-input; }
 .tooltip { -fx-text-fill: -auction-on-accent; -fx-background-color: #344054; }
 
@@ -289,3 +287,38 @@
 .connection-options > .title { -fx-cursor: hand; }
 .connection-options > .title:hover { -fx-background-color: -auction-neutral; -fx-background-radius: 6; }
 .text-area:focused { -fx-border-color: -auction-accent; }
+.skin-picker { -fx-padding: 12; }
+.skin-category-bar { -fx-background-color: -auction-neutral; -fx-background-radius: 10; -fx-padding: 6; }
+.skin-category-menu {
+    -fx-background-color: transparent; -fx-background-radius: 7; -fx-cursor: hand;
+    -fx-padding: 10 16; -fx-font-size: 15px;
+}
+.skin-category-menu > .label { -fx-text-fill: -auction-body; }
+.skin-category-menu .arrow { -fx-background-color: -auction-body; }
+.skin-category-menu:hover, .skin-category-menu:showing, .selected-category { -fx-background-color: -auction-accent-soft; }
+.selected-category > .label { -fx-text-fill: -auction-accent; -fx-font-weight: bold; }
+.skin-picker-path { -fx-text-fill: -auction-muted; -fx-padding: 4 0; }
+.context-menu { -fx-background-color: -auction-surface; -fx-border-color: -auction-border; -fx-background-radius: 8; -fx-padding: 6; }
+.menu-item { -fx-padding: 9 18; }
+.menu-item .label { -fx-text-fill: -auction-text; }
+.menu-item:focused { -fx-background-color: -auction-accent-soft; }
+.menu-item:focused .label { -fx-text-fill: -auction-accent; }
+.skin-choice {
+    -fx-background-color: -auction-surface; -fx-border-color: -auction-border;
+    -fx-padding: 12; -fx-background-radius: 12; -fx-border-radius: 12;
+}
+.skin-choice:hover { -fx-background-color: -auction-neutral; -fx-border-color: -auction-accent; }
+.selected-skin { -fx-background-color: -auction-accent-soft; -fx-border-color: -auction-accent; }
+.skin-choice-title { -fx-font-size: 14px; -fx-font-weight: bold; }
+.skin-promo-banner {
+    -fx-background-color: linear-gradient(to right, -auction-surface, -auction-accent-soft);
+    -fx-background-radius: 16; -fx-border-color: -auction-border; -fx-border-radius: 16;
+}
+.promo-slide { -fx-padding: 22 32; }
+.promo-title { -fx-font-size: 32px; -fx-font-weight: bold; -fx-text-fill: -auction-text; }
+.promo-description { -fx-font-size: 14px; -fx-text-fill: -auction-body; -fx-line-spacing: 3; }
+.promo-note { -fx-font-size: 11px; -fx-text-fill: -auction-muted; -fx-padding: 6 0 0 0; }
+.promo-art {
+    -fx-background-color: radial-gradient(center 50% 50%, radius 65%, #3563E928, transparent);
+    -fx-background-radius: 90;
+}
