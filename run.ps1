@@ -1,6 +1,9 @@
 param(
     [ValidateSet('Server', 'Client', 'Demo', 'Preview')]
-    [string]$Mode = 'Client'
+    [string]$Mode = 'Client',
+    [int]$Port = 0,
+    [switch]$Public,
+    [string]$Server = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +45,17 @@ if (Test-Path -LiteralPath 'src/main/resources') {
 }
 
 $mainClass = if ($Mode -eq 'Server') { 'com.auction.server.ServerApplication' } else { 'com.auction.client.ClientApplication' }
-$appArguments = if ($Mode -eq 'Demo') { @('--demo') } elseif ($Mode -eq 'Preview') { @('--preview') } else { @() }
+$appArguments = @()
+if ($Mode -eq 'Server') {
+    if ($Port -gt 0) { $appArguments += @('--port', "$Port") }
+    if ($Public) { $appArguments += '--public' }
+} elseif ($Mode -eq 'Demo') {
+    $appArguments = @('--demo')
+} elseif ($Mode -eq 'Preview') {
+    $appArguments = @('--preview')
+} elseif ($Server -and $Server.Trim().Length -gt 0) {
+    $appArguments = @("--server=$($Server.Trim())")
+}
+
 & $javaRuntime --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass @appArguments
 exit $LASTEXITCODE

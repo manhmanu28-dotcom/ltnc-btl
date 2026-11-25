@@ -4,7 +4,9 @@ import com.auction.client.controller.AuctionListController;
 import com.auction.client.controller.AuthenticationController;
 import com.auction.client.controller.AuctionDemoController;
 import com.auction.client.model.AuthenticatedSession;
+import com.auction.client.service.ConnectionPreferences;
 import com.auction.client.ui.AuctionTheme;
+import com.auction.server.network.ServerEndpoint;
 import javafx.application.Application;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -23,10 +25,12 @@ public class ClientApplication extends Application {
     private AuthenticationController authentication;
     private AuctionDemoController demo;
     private Stage stage;
+    private ServerEndpoint initialEndpoint;
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
+        this.initialEndpoint = ConnectionPreferences.resolveInitialEndpoint(getParameters().getRaw());
         stage.setTitle("Auction Client");
         if (getParameters().getRaw().contains("--preview")) {
             showPreview();
@@ -41,7 +45,10 @@ public class ClientApplication extends Application {
     }
 
     private void showLogin() {
-        authentication = new AuthenticationController(this::showAuctions, this::showPreview);
+        ServerEndpoint endpoint = initialEndpoint != null
+                ? initialEndpoint
+                : ConnectionPreferences.loadLastEndpoint();
+        authentication = new AuthenticationController(this::showAuctions, this::showPreview, endpoint);
         if (stage.getScene() == null) {
             stage.setScene(new Scene(authentication.getView(), 1280, 860));
         } else {
@@ -106,6 +113,7 @@ public class ClientApplication extends Application {
     }
 
     private void showAuctions(AuthenticatedSession session) {
+        this.initialEndpoint = new ServerEndpoint(session.host(), session.port());
         controller = new AuctionListController(session);
         Button logout = new Button("Đăng xuất");
         logout.getStyleClass().add("ghost-button");

@@ -36,17 +36,29 @@ public class  AuctionListService {
 
         List<AuctionSummary> result = new ArrayList<>();
         for (Object entry : auctions) {
-            if (!(entry instanceof Map<?, ?> auction)
-                    || !(auction.get("auctionId") instanceof String id)
-                    || !(auction.get("status") instanceof String status)
-                    || !(auction.get("currentHighestBid") instanceof Number price)
-                    || !(auction.get("item") instanceof Map<?, ?> item)
-                    || !(item.get("title") instanceof String title)) {
+            if (!(entry instanceof Map<?, ?> auction)) {
                 throw new IOException("Server trả về thông tin phiên không hợp lệ.");
             }
-            result.add(new AuctionSummary(id, title, price.doubleValue(), status));
+            AuctionSummary summary = parseAuctionSummary(auction);
+            if (summary == null) {
+                throw new IOException("Server trả về thông tin phiên không hợp lệ.");
+            }
+            result.add(summary);
         }
         return result;
+    }
+
+    /** Chuyển đổi một bản đồ JSON DTO của phiên đấu giá sang {@link AuctionSummary}. */
+    public static AuctionSummary parseAuctionSummary(Map<?, ?> auction) {
+        if (auction == null
+                || !(auction.get("auctionId") instanceof String id)
+                || !(auction.get("status") instanceof String status)
+                || !(auction.get("currentHighestBid") instanceof Number price)
+                || !(auction.get("item") instanceof Map<?, ?> item)
+                || !(item.get("title") instanceof String title)) {
+            return null;
+        }
+        return new AuctionSummary(id, title, price.doubleValue(), status);
     }
     public void createAuction(AuctionSocketClient client,
                               String title,

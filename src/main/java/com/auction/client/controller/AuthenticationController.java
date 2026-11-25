@@ -2,18 +2,24 @@ package com.auction.client.controller;
 
 import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.AuthenticationClientService;
+import com.auction.client.service.ConnectionPreferences;
 import com.auction.client.ui.AuctionTheme;
 import com.auction.client.ui.PasswordInput;
 import com.auction.client.ui.SkinShowcase;
+import com.auction.server.network.AuctionSocketClient;
+import com.auction.server.network.LanDiscoveryService;
+import com.auction.server.network.ServerEndpoint;
 import com.auction.server.network.protocol.SocketResponse;
+import javafx.application.Platform;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.VPos;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
-import javafx.scene.control.Label;
+import javafx.scene.control.ChoiceDialog;
 import javafx.scene.control.Hyperlink;
+import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
@@ -26,16 +32,23 @@ import javafx.scene.layout.VBox;
 
 import static com.auction.client.ui.AuctionTheme.label;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
-/** Màn hình đăng ký và đăng nhập qua Socket, không truy cập database từ client. */
+/** Màn hình đăng ký và đăng nhập qua Socket, hỗ trợ kết nối cùng Wi-Fi (LAN) và khác Wi-Fi (Internet/Tunnel). */
 public class AuthenticationController implements AutoCloseable {
     private final VBox view = new VBox(16);
     private final ScrollPane scrollPane = new ScrollPane(view);
-    private final TextField host = new TextField("127.0.0.1");
-    private final TextField port = new TextField("8888");
+    private final TextField host = new TextField();
+    private final TextField port = new TextField();
+    private final Button probeButton = new Button("Kiểm tra");
+    private final Button discoverButton = new Button("Tìm cùng Wi-Fi");
+    private final Label connectionStatus = label("", "form-hint");
+    private final TitledPane connectionOptions;
     private final TextField loginName = new TextField();
     private final PasswordField loginPassword = new PasswordField();
     private final TextField registerName = new TextField();
@@ -49,7 +62,7 @@ public class AuthenticationController implements AutoCloseable {
     private final VBox formHost = new VBox();
     private final SkinShowcase skinShowcase = new SkinShowcase();
     private Consumer<Boolean> showForm;
-    private final HBox connectionBar;
+    private final VBox connectionPanel;
     private final AuthenticationClientService service = new AuthenticationClientService();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "Auction-Authentication");
@@ -57,32 +70,62 @@ public class AuthenticationController implements AutoCloseable {
         return thread;
     });
     private final Consumer<AuthenticatedSession> onLogin;
-    private Task<SocketResponse> pendingTask;
+    private Task<?> pendingTask;
+    private boolean updatingConnectionFields;
     private boolean closed;
 
     public AuthenticationController(Consumer<AuthenticatedSession> onLogin) {
-        this(onLogin, null);
+        this(onLogin, null, ConnectionPreferences.loadLastEndpoint());
     }
 
     public AuthenticationController(Consumer<AuthenticatedSession> onLogin, Runnable onDemo) {
+        this(onLogin, onDemo, ConnectionPreferences.loadLastEndpoint());
+    }
+
+    public AuthenticationController(Consumer<AuthenticatedSession> onLogin, Runnable onDemo, ServerEndpoint initialEndpoint) {
         this.onLogin = onLogin;
+        ServerEndpoint endpoint = initialEndpoint != null ? initialEndpoint : ConnectionPreferences.DEFAULT_ENDPOINT;
+        host.setText(endpoint.host());
+        port.setText(String.valueOf(endpoint.port()));
+
         Label title = label("Chào mừng trở lại", "card-title");
         Label introduction = label("Đăng nhập để khám phá các phiên đấu giá.", "muted");
         introduction.setWrapText(true);
+
         host.setPrefColumnCount(12);
         port.setPrefColumnCount(5);
-        connectionBar = new HBox(8, host, port);
+        HBox connectionBar = new HBox(8, host, port);
         connectionBar.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(host, Priority.ALWAYS);
         host.setMinWidth(100);
-        host.setPromptText("Địa chỉ server");
+        host.setPromptText("IP / domain hoặc dán host:port");
         host.setAccessibleText("Địa chỉ server");
         port.setPromptText("Cổng");
         port.setAccessibleText("Cổng kết nối");
-        port.setMaxWidth(80);
-        TitledPane connectionOptions = new TitledPane("Kết nối máy chủ", connectionBar);
+        port.setMaxWidth(84);
+
+        probeButton.getStyleClass().add("secondary-button");
+        probeButton.setMaxWidth(Double.MAX_VALUE);
+        probeButton.setOnAction(event -> probeServer());
+        discoverButton.getStyleClass().add("secondary-button");
+        discoverButton.setMaxWidth(Double.MAX_VALUE);
+        discoverButton.setOnAction(event -> discoverLanServers());
+        HBox.setHgrow(probeButton, Priority.ALWAYS);
+        HBox.setHgrow(discoverButton, Priority.ALWAYS);
+        HBox connectionActions = new HBox(8, discoverButton, probeButton);
+        connectionActions.setAlignment(Pos.CENTER_LEFT);
+
+        connectionStatus.setWrapText(true);
+        connectionStatus.setText("Cùng Wi-Fi: bấm Tìm cùng Wi-Fi · Khác Wi-Fi: dán host:port từ Server -Public.");
+
+        connectionPanel = new VBox(8, connectionBar, connectionActions, connectionStatus);
+        connectionOptions = new TitledPane(connectionTitle(), connectionPanel);
         connectionOptions.getStyleClass().add("connection-options");
-        connectionOptions.setExpanded(false);
+        connectionOptions.setExpanded(!endpoint.isLoopback());
+
+        installSmartAddressPaste();
+        host.textProperty().addListener((obs, before, after) -> connectionOptions.setText(connectionTitle()));
+        port.textProperty().addListener((obs, before, after) -> connectionOptions.setText(connectionTitle()));
 
         Button login = new Button("Đăng nhập");
         login.setId("auth-login-button");
@@ -212,6 +255,178 @@ public class AuthenticationController implements AutoCloseable {
         AuctionTheme.apply(scrollPane);
     }
 
+    private void installSmartAddressPaste() {
+        host.textProperty().addListener((observable, before, text) -> {
+            if (updatingConnectionFields || text == null || !ServerEndpoint.containsHostAndPort(text)) {
+                return;
+            }
+            try {
+                ServerEndpoint parsed = ServerEndpoint.parse(text);
+                Platform.runLater(() -> applyEndpoint(parsed));
+            } catch (IllegalArgumentException ignored) {
+                // Người dùng đang gõ dở địa chỉ
+            }
+        });
+    }
+
+    private void applyEndpoint(ServerEndpoint endpoint) {
+        if (endpoint == null) {
+            return;
+        }
+        updatingConnectionFields = true;
+        try {
+            host.setText(endpoint.host());
+            port.setText(String.valueOf(endpoint.port()));
+            connectionOptions.setText(connectionTitle());
+        } finally {
+            updatingConnectionFields = false;
+        }
+    }
+
+    private String connectionTitle() {
+        String h = host.getText() == null ? "" : host.getText().trim();
+        String p = port.getText() == null ? "" : port.getText().trim();
+        if (h.isEmpty()) {
+            return "Kết nối máy chủ";
+        }
+        return p.isEmpty() ? "Kết nối máy chủ · " + h : "Kết nối máy chủ · " + h + ":" + p;
+    }
+
+    private void setConnectionStatus(String text, String styleClass) {
+        connectionStatus.getStyleClass().removeAll("message-error", "message-success");
+        if (styleClass != null) {
+            connectionStatus.getStyleClass().add(styleClass);
+        }
+        connectionStatus.setText(text);
+    }
+
+    private ServerEndpoint parseEndpointFromFields() {
+        ServerEndpoint endpoint = ServerEndpoint.fromInputs(host.getText(), port.getText());
+        applyEndpoint(endpoint);
+        return endpoint;
+    }
+
+    private void probeServer() {
+        if (closed || (pendingTask != null && pendingTask.isRunning())) {
+            return;
+        }
+        ServerEndpoint endpoint;
+        try {
+            endpoint = parseEndpointFromFields();
+        } catch (IllegalArgumentException error) {
+            setConnectionStatus(error.getMessage(), "message-error");
+            return;
+        }
+
+        setBusy(true);
+        setConnectionStatus("Đang kiểm tra kết nối tới " + endpoint.toAddress() + "…", null);
+
+        Task<AuctionSocketClient.ServerProbeResult> task = new Task<>() {
+            @Override
+            protected AuctionSocketClient.ServerProbeResult call() throws Exception {
+                return AuctionSocketClient.probe(endpoint, 5000);
+            }
+        };
+        pendingTask = task;
+        task.setOnSucceeded(event -> {
+            if (closed) {
+                return;
+            }
+            setBusy(false);
+            pendingTask = null;
+            AuctionSocketClient.ServerProbeResult result = task.getValue();
+            ConnectionPreferences.save(result.endpoint());
+            setConnectionStatus(
+                    String.format("✓ Đã kết nối %s (%d ms · %d phiên · %d người online).",
+                            result.endpoint().toAddress(),
+                            result.latencyMillis(),
+                            result.auctionCount(),
+                            result.connectedClients()),
+                    "message-success");
+        });
+        task.setOnFailed(event -> {
+            if (closed) {
+                return;
+            }
+            setBusy(false);
+            pendingTask = null;
+            String detail = task.getException() != null ? task.getException().getMessage() : "Không rõ nguyên nhân";
+            setConnectionStatus(
+                    "Không kết nối được " + endpoint.toAddress() + " (" + detail
+                            + "). Kiểm tra Server đã bật, đúng IP:Cổng hoặc tường lửa Windows.",
+                    "message-error");
+        });
+        executor.execute(task);
+    }
+
+    private void discoverLanServers() {
+        if (closed || (pendingTask != null && pendingTask.isRunning())) {
+            return;
+        }
+        setBusy(true);
+        setConnectionStatus("Đang quét máy chủ trong cùng mạng Wi-Fi / LAN…", null);
+
+        Task<List<LanDiscoveryService.DiscoveredServer>> task = new Task<>() {
+            @Override
+            protected List<LanDiscoveryService.DiscoveredServer> call() {
+                return LanDiscoveryService.discoverServers(1200);
+            }
+        };
+        pendingTask = task;
+        task.setOnSucceeded(event -> {
+            if (closed) {
+                return;
+            }
+            setBusy(false);
+            pendingTask = null;
+            List<LanDiscoveryService.DiscoveredServer> servers = task.getValue();
+            if (servers.isEmpty()) {
+                setConnectionStatus(
+                        "Không thấy máy chủ nào cùng Wi-Fi. Nếu khác Wi-Fi, hãy dán địa chỉ host:port từ Server -Public.",
+                        "message-error");
+                return;
+            }
+            if (servers.size() == 1) {
+                LanDiscoveryService.DiscoveredServer found = servers.get(0);
+                applyEndpoint(found.toEndpoint());
+                ConnectionPreferences.save(found.toEndpoint());
+                setConnectionStatus("✓ Đã tìm thấy " + found.displayLabel(), "message-success");
+                return;
+            }
+
+            Map<String, LanDiscoveryService.DiscoveredServer> choices = new LinkedHashMap<>();
+            for (LanDiscoveryService.DiscoveredServer server : servers) {
+                choices.put(server.displayLabel(), server);
+            }
+            List<String> labels = List.copyOf(choices.keySet());
+            ChoiceDialog<String> dialog = new ChoiceDialog<>(labels.get(0), labels);
+            dialog.setTitle("Chọn máy chủ trong mạng LAN");
+            dialog.setHeaderText("Tìm thấy " + servers.size() + " máy chủ đấu giá trong cùng mạng Wi-Fi:");
+            dialog.setContentText("Máy chủ:");
+            AuctionTheme.apply(dialog.getDialogPane());
+            if (scrollPane.getScene() != null) {
+                dialog.initOwner(scrollPane.getScene().getWindow());
+            }
+            dialog.showAndWait().ifPresent(selectedLabel -> {
+                LanDiscoveryService.DiscoveredServer chosen = choices.get(selectedLabel);
+                if (chosen != null) {
+                    applyEndpoint(chosen.toEndpoint());
+                    ConnectionPreferences.save(chosen.toEndpoint());
+                    setConnectionStatus("✓ Đã chọn " + chosen.displayLabel(), "message-success");
+                }
+            });
+        });
+        task.setOnFailed(event -> {
+            if (closed) {
+                return;
+            }
+            setBusy(false);
+            pendingTask = null;
+            setConnectionStatus("Quét mạng LAN gặp lỗi. Hãy nhập thủ công địa chỉ Server và Cổng.", "message-error");
+        });
+        executor.execute(task);
+    }
+
     public Parent getView() {
         return scrollPane;
     }
@@ -220,17 +435,17 @@ public class AuthenticationController implements AutoCloseable {
         if (closed || (pendingTask != null && pendingTask.isRunning())) {
             return;
         }
-        String serverHost = host.getText().trim();
-        int serverPort;
+        ServerEndpoint endpoint;
         try {
-            serverPort = Integer.parseInt(port.getText().trim());
-            if (serverHost.isEmpty() || serverPort < 1 || serverPort > 65535) {
-                throw new IllegalArgumentException();
-            }
+            endpoint = parseEndpointFromFields();
         } catch (IllegalArgumentException error) {
-            message.setText("Nhập địa chỉ server và cổng hợp lệ (1–65535).");
+            message.setText(error.getMessage());
+            connectionOptions.setExpanded(true);
             return;
         }
+        String serverHost = endpoint.host();
+        int serverPort = endpoint.port();
+
         String username = (register ? registerName : loginName).getText().trim();
         String password = (register ? registerPassword : loginPassword).getText();
         String emailAddress = email.getText().trim();
@@ -257,6 +472,7 @@ public class AuthenticationController implements AutoCloseable {
             }
             setBusy(false);
             clearPasswords();
+            ConnectionPreferences.save(endpoint);
             if (register) {
                 loginName.setText(username);
                 showForm.accept(false);
@@ -282,7 +498,7 @@ public class AuthenticationController implements AutoCloseable {
 
     private void setBusy(boolean busy) {
         formHost.setDisable(busy);
-        connectionBar.setDisable(busy);
+        connectionPanel.setDisable(busy);
     }
 
     private void clearPasswords() {
