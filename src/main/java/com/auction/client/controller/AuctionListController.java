@@ -9,6 +9,9 @@ import com.auction.client.service.SkinCatalog;
 import com.auction.client.ui.SkinPicker;
 import com.auction.client.ui.SkinPromoBanner;
 import com.auction.client.ui.AuctionTheme;
+import com.auction.server.network.ServerEndpoint;
+import com.auction.server.network.protocol.ActionType;
+import com.auction.server.network.protocol.SocketResponse;
 import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.ReadOnlyStringWrapper;
@@ -35,6 +38,8 @@ import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -46,8 +51,10 @@ import javafx.scene.layout.VBox;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /** Dựng màn hình danh sách và tải các phiên thật từ Socket Server. */
 public class AuctionListController implements AutoCloseable {
@@ -65,8 +72,10 @@ public class AuctionListController implements AutoCloseable {
     private final Button enterRoomButton = new Button("Vào phòng");
     private final Button reloadButton = new Button("Tải danh sách");
     private final Button createAuctionButton = new Button("+ Đăng bán sản phẩm");
+    private final Button copyInviteButton = new Button("Sao chép địa chỉ mời");
     private final TextField hostField = new TextField("127.0.0.1");
     private final TextField portField = new TextField("8888");
+    private TitledPane connectionSettings;
     private final Label connectionLabel = new Label("Nhập địa chỉ server rồi bấm Tải danh sách.");
     private final AuctionListService auctionService = new AuctionListService();
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -75,6 +84,7 @@ public class AuctionListController implements AutoCloseable {
         return thread;
     });
     private Task<List<AuctionSummary>> loadTask;
+    private Consumer<SocketResponse> realtimeListener;
     private boolean loading;
     private boolean closed;
     private boolean previewMode;
@@ -99,6 +109,10 @@ public class AuctionListController implements AutoCloseable {
         portField.setText(String.valueOf(session.port()));
         hostField.setEditable(false);
         portField.setEditable(false);
+        if (connectionSettings != null) {
+            connectionSettings.setText("Cài đặt kết nối · " + session.host() + ":" + session.port());
+        }
+        registerRealtimeUpdates();
         loadAuctions();
     }
 
@@ -112,6 +126,7 @@ public class AuctionListController implements AutoCloseable {
         controller.previewMode = true;
         controller.reloadButton.setDisable(true);
         controller.createAuctionButton.setText("+ Xem thử đăng bán skin");
+        controller.copyInviteButton.setDisable(true);
         controller.hostField.setDisable(true);
         controller.portField.setDisable(true);
         controller.connectionLabel.setText("BẢN XEM GIAO DIỆN · Tất cả sản phẩm và mức giá dưới đây là dữ liệu mẫu.");
@@ -144,10 +159,12 @@ public class AuctionListController implements AutoCloseable {
         reloadButton.setOnAction(event -> loadAuctions());
         createAuctionButton.getStyleClass().add("primary-button");
         createAuctionButton.setOnAction(event -> showCreateAuctionDialog());
-        hostField.setPrefColumnCount(12);
+        copyInviteButton.getStyleClass().add("secondary-button");
+        copyInviteButton.setOnAction(event -> copyServerInvite());
+        hostField.setPrefColumnCount(14);
         portField.setPrefColumnCount(5);
         HBox connectionBar = new HBox(10, new Label("Server:"), hostField,
-                new Label("Cổng:"), portField);
+                new Label("Cổng:"), portField, copyInviteButton);
         connectionBar.setAlignment(Pos.CENTER_LEFT);
 
         Region spacer = new Region();
@@ -177,7 +194,7 @@ public class AuctionListController implements AutoCloseable {
         searchField.textProperty().addListener((observable, before, value) -> filterAuctions());
         statusFilter.valueProperty().addListener((observable, before, value) -> filterAuctions());
         HBox filters = new HBox(12, searchField, statusFilter);
-        TitledPane connectionSettings = new TitledPane("Cài đặt kết nối", connectionBar);
+        connectionSettings = new TitledPane("Cài đặt kết nối", connectionBar);
         connectionSettings.setExpanded(false);
         connectionSettings.getStyleClass().add("connection-options");
         VBox header = new VBox(14, AuctionTheme.label("KHÁM PHÁ / PHIÊN ĐẤU GIÁ", "eyebrow"), heading, subtitle, statistics, filters, connectionSettings, connectionLabel);
@@ -360,15 +377,18 @@ public class AuctionListController implements AutoCloseable {
         if (loading || closed) {
             return;
         }
-        String host = hostField.getText().trim();
+        String host;
         int port;
         try {
-            port = Integer.parseInt(portField.getText().trim());
-            if (host.isEmpty() || port < 1 || port > 65535) {
-                throw new IllegalArgumentException();
+            ServerEndpoint endpoint = ServerEndpoint.fromInputs(hostField.getText(), portField.getText());
+            host = endpoint.host();
+            port = endpoint.port();
+            if (hostField.isEditable()) {
+                hostField.setText(host);
+                portField.setText(String.valueOf(port));
             }
         } catch (IllegalArgumentException error) {
-            connectionLabel.setText("Hãy nhập địa chỉ server và cổng từ 1 đến 65535.");
+            connectionLabel.setText(error.getMessage());
             return;
         }
 
@@ -389,34 +409,20 @@ public class AuctionListController implements AutoCloseable {
             if (closed) {
                 return;
             }
-            double scrollPosition = products.getVvalue();
+            double scrollPosition = captureMarketplaceScroll();
             AuctionSummary selection = auctionTable.getSelectionModel().getSelectedItem();
-            // The focused card is about to be replaced. Keep focus in the scroll area
-            // so JavaFX does not move it to a control at the top of the marketplace.
-            javafx.scene.Node focused = view.getScene() == null ? null : view.getScene().getFocusOwner();
-            for (javafx.scene.Node node = focused; node != null; node = node.getParent()) {
-                if (node == productGrid) {
-                    products.requestFocus();
-                    break;
-                }
-            }
             auctions.setAll(loadTask.getValue());
             if (selection != null) {
                 auctions.stream().filter(a -> a.auctionId().equals(selection.auctionId())).findFirst()
                         .ifPresent(a -> auctionTable.getSelectionModel().select(a));
             }
-            totalCount.setText(String.valueOf(auctions.size()));
-            runningCount.setText(String.valueOf(auctions.stream().filter(a -> a.status().equals("RUNNING")).count()));
-            openCount.setText(String.valueOf(auctions.stream().filter(a -> a.status().equals("OPEN")).count()));
+            updateSummaryCounters();
             auctionTable.sort();
             connectionLabel.setText("Đã tải " + loadTask.getValue().size()
                     + " phiên từ " + host + ":" + port + ".");
             setLoading(false);
             updateEmptyState();
-            // Restore after the new cards and status labels have their final sizes.
-            view.applyCss();
-            view.layout();
-            products.setVvalue(scrollPosition);
+            restoreMarketplaceScroll(scrollPosition);
         });
         loadTask.setOnFailed(event -> {
             if (closed) {
@@ -444,11 +450,120 @@ public class AuctionListController implements AutoCloseable {
         enterRoomButton.setDisable(value || auctionTable.getSelectionModel().getSelectedItem() == null);
     }
 
+    private void registerRealtimeUpdates() {
+        if (session == null || session.client() == null) {
+            return;
+        }
+        realtimeListener = response -> {
+            if (closed || response == null || response.getAction() == null) {
+                return;
+            }
+            ActionType action = response.getAction();
+            if (action != ActionType.STATUS_UPDATE
+                    && action != ActionType.BID_UPDATE
+                    && action != ActionType.NOTIFY_UPDATE) {
+                return;
+            }
+            Object auctionObj = response.getData().get("auction");
+            if (!(auctionObj instanceof Map<?, ?> auctionMap)) {
+                return;
+            }
+            AuctionSummary updated = AuctionListService.parseAuctionSummary(auctionMap);
+            if (updated == null) {
+                return;
+            }
+            String eventType = String.valueOf(response.getData().get("eventType"));
+            String serverMessage = response.getMessage();
+            Platform.runLater(() -> {
+                if (closed) {
+                    return;
+                }
+                upsertAuction(updated);
+                if ("AUCTION_CREATED".equals(eventType)) {
+                    connectionLabel.setText("Cập nhật trực tiếp: " + (serverMessage != null ? serverMessage : updated.itemTitle()));
+                } else if (action == ActionType.BID_UPDATE && serverMessage != null) {
+                    connectionLabel.setText("Cập nhật giá trực tiếp: " + serverMessage);
+                }
+            });
+        };
+        session.client().addRealtimeListener(realtimeListener);
+    }
+
+    private void upsertAuction(AuctionSummary updated) {
+        double scrollPosition = captureMarketplaceScroll();
+        AuctionSummary selection = auctionTable.getSelectionModel().getSelectedItem();
+        int existingIndex = -1;
+        for (int i = 0; i < auctions.size(); i++) {
+            if (auctions.get(i).auctionId().equals(updated.auctionId())) {
+                existingIndex = i;
+                break;
+            }
+        }
+        if (existingIndex >= 0) {
+            auctions.set(existingIndex, updated);
+        } else {
+            auctions.add(0, updated);
+        }
+        updateSummaryCounters();
+        updateEmptyState();
+        if (selection != null) {
+            auctions.stream().filter(a -> a.auctionId().equals(selection.auctionId())).findFirst()
+                    .ifPresent(a -> auctionTable.getSelectionModel().select(a));
+        }
+        restoreMarketplaceScroll(scrollPosition);
+    }
+
+    private double captureMarketplaceScroll() {
+        double position = products.getVvalue();
+        // Move focus off a card that is about to be replaced during a refresh or push.
+        javafx.scene.Node focused = view.getScene() == null ? null : view.getScene().getFocusOwner();
+        for (javafx.scene.Node node = focused; node != null; node = node.getParent()) {
+            if (node == productGrid) {
+                products.requestFocus();
+                break;
+            }
+        }
+        return position;
+    }
+
+    private void restoreMarketplaceScroll(double position) {
+        view.applyCss();
+        view.layout();
+        products.setVvalue(position);
+    }
+
+    private void updateSummaryCounters() {
+        totalCount.setText(String.valueOf(auctions.size()));
+        runningCount.setText(String.valueOf(auctions.stream().filter(a -> a.status().equals("RUNNING")).count()));
+        openCount.setText(String.valueOf(auctions.stream().filter(a -> a.status().equals("OPEN")).count()));
+    }
+
+    private void copyServerInvite() {
+        try {
+            ServerEndpoint endpoint = ServerEndpoint.fromInputs(hostField.getText(), portField.getText());
+            ClipboardContent content = new ClipboardContent();
+            content.putString(endpoint.toAddress());
+            Clipboard.getSystemClipboard().setContent(content);
+            if (endpoint.isLoopback()) {
+                connectionLabel.setText("Đã sao chép " + endpoint.toAddress()
+                        + " (địa chỉ nội bộ). Để máy khác cùng vào, hãy chạy Server và gửi IP LAN hoặc địa chỉ -Public.");
+            } else {
+                connectionLabel.setText("Đã sao chép địa chỉ mời: " + endpoint.toAddress()
+                        + " — gửi cho bạn bè dán vào ô Server để cùng tham gia!");
+            }
+        } catch (IllegalArgumentException error) {
+            connectionLabel.setText(error.getMessage());
+        }
+    }
+
     @Override
     public void close() {
         closed = true;
         if (roomStage != null) roomStage.close();
         if (roomController != null) roomController.close();
+        if (session != null && session.client() != null && realtimeListener != null) {
+            session.client().removeRealtimeListener(realtimeListener);
+        }
         promoBanner.close();
         if (loadTask != null) {
             loadTask.cancel(true);

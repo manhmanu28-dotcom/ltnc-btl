@@ -33,8 +33,18 @@ import java.util.function.Consumer;
  */
 public class AuctionSocketClient implements Closeable {
 
+    public static final int DEFAULT_CONNECT_TIMEOUT_MS = 8000;
+
+    public record ServerProbeResult(
+            ServerEndpoint endpoint,
+            long latencyMillis,
+            int auctionCount,
+            int connectedClients) {
+    }
+
     private final String host;
     private final int port;
+    private final int connectTimeoutMillis;
     private final Map<String, CompletableFuture<SocketResponse>> pendingRequests;
     private final List<Consumer<SocketResponse>> realtimeListeners;
     private final AtomicBoolean connected;
@@ -45,11 +55,45 @@ public class AuctionSocketClient implements Closeable {
     private Thread listenerThread;
 
     public AuctionSocketClient(String host, int port) {
+        this(host, port, DEFAULT_CONNECT_TIMEOUT_MS);
+    }
+
+    public AuctionSocketClient(String host, int port, int connectTimeoutMillis) {
         this.host = (host != null && !host.trim().isEmpty()) ? host.trim() : "127.0.0.1";
         this.port = port;
+        this.connectTimeoutMillis = Math.max(500, connectTimeoutMillis);
         this.pendingRequests = new ConcurrentHashMap<>();
         this.realtimeListeners = new CopyOnWriteArrayList<>();
         this.connected = new AtomicBoolean(false);
+    }
+
+    /**
+     * Kiểm tra kết nối tới một máy chủ bất kỳ (LAN hoặc Internet) bằng lệnh PING.
+     */
+    public static ServerProbeResult probe(ServerEndpoint endpoint, int timeoutMillis) throws IOException {
+        if (endpoint == null) {
+            throw new IllegalArgumentException("Địa chỉ server không được null!");
+        }
+        int safeTimeout = Math.max(500, timeoutMillis);
+        long startedAt = System.nanoTime();
+        try (AuctionSocketClient client = new AuctionSocketClient(endpoint.host(), endpoint.port(), safeTimeout)) {
+            client.connect();
+            SocketResponse response = client.sendRequest(SocketRequest.of(ActionType.PING), safeTimeout);
+            if (!response.isSuccess()) {
+                throw new IOException(response.getMessage());
+            }
+            long latencyMs = Math.max(1L, (System.nanoTime() - startedAt) / 1_000_000L);
+            int auctionCount = extractInt(response.getData().get("auctionCount"));
+            int connectedClients = extractInt(response.getData().get("connectedClients"));
+            return new ServerProbeResult(endpoint, latencyMs, auctionCount, connectedClients);
+        }
+    }
+
+    private static int extractInt(Object value) {
+        if (value instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        return 0;
     }
 
     /**
@@ -61,13 +105,14 @@ public class AuctionSocketClient implements Closeable {
         }
         Socket newSocket = new Socket();
         try {
-            newSocket.connect(new InetSocketAddress(this.host, this.port), 5000);
+            newSocket.connect(new InetSocketAddress(this.host, this.port), this.connectTimeoutMillis);
         } catch (IOException | RuntimeException error) {
             newSocket.close();
             throw error;
         }
         this.socket = newSocket;
         this.socket.setTcpNoDelay(true);
+        this.socket.setKeepAlive(true);
         this.reader = new BufferedReader(
                 new InputStreamReader(this.socket.getInputStream(), StandardCharsets.UTF_8));
         this.writer = new PrintWriter(
@@ -157,6 +202,14 @@ public class AuctionSocketClient implements Closeable {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    public String getHost() {
+        return this.host;
+    }
+
+    public int getPort() {
+        return this.port;
     }
 
     public boolean isConnected() {
