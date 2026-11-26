@@ -198,4 +198,18 @@ class SharedServerConnectivityTest {
         assertEquals("192.168.1.99", fromProps.host());
         assertEquals(8888, fromProps.port());
     }
+
+    @Test
+    @DisplayName("6. Gộp trùng lặp 1 máy chủ khi có nhiều card mạng (VirtualBox 192.168.56.1 + Wi-Fi 192.168.0.106 + 127.0.0.1)")
+    void deduplicatesSameServerAcrossVirtualBoxWifiAndLoopback() {
+        List<LanDiscoveryService.DiscoveredServer> raw = List.of(
+                new LanDiscoveryService.DiscoveredServer("192.168.56.1", 8888, "LAPTOP-BBUJK48M", 0, 0),
+                new LanDiscoveryService.DiscoveredServer("127.0.0.1", 8888, "LAPTOP-BBUJK48M", 0, 0),
+                new LanDiscoveryService.DiscoveredServer("192.168.0.106", 8888, "LAPTOP-BBUJK48M", 0, 0)
+        );
+        List<LanDiscoveryService.DiscoveredServer> deduplicated = LanDiscoveryService.deduplicateServers(raw);
+        assertEquals(1, deduplicated.size(), "Cùng 1 máy chủ chỉ được hiển thị đúng 1 dòng!");
+        assertEquals("192.168.0.106", deduplicated.get(0).host(),
+                "Phải ưu tiên IP Wi-Fi thực thay vì VirtualBox Host-Only 192.168.56.1 hay 127.0.0.1!");
+    }
 }
