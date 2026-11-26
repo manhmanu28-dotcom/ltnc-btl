@@ -89,9 +89,12 @@ public class AuctionListController implements AutoCloseable {
     private boolean closed;
     private boolean previewMode;
     private final TilePane productGrid = new TilePane();
+    private final ScrollPane products = new ScrollPane();
     private final SkinPromoBanner promoBanner = new SkinPromoBanner();
     private final Label emptyMessage = AuctionTheme.label("Chưa có phiên đấu giá. Bấm Tải danh sách để cập nhật.", "muted");
     private AuthenticatedSession session;
+    private javafx.stage.Stage roomStage;
+    private AuctionRoomController roomController;
     private final DecimalFormat currencyFormat =
             new DecimalFormat("#,##0.## 'VNĐ'", DecimalFormatSymbols.getInstance(Locale.US));
 
@@ -204,7 +207,7 @@ public class AuctionListController implements AutoCloseable {
         productGrid.setPadding(new Insets(2, 4, 16, 2));
         VBox marketContent = new VBox(24, promoBanner, header, productGrid);
         marketContent.setFillWidth(true);
-        ScrollPane products = new ScrollPane(marketContent);
+        products.setContent(marketContent);
         products.setFitToWidth(true);
         products.viewportBoundsProperty().addListener((observable, before, bounds) -> {
             double available = Math.max(280, bounds.getWidth() - 24);
@@ -390,13 +393,8 @@ public class AuctionListController implements AutoCloseable {
         }
 
         setLoading(true);
-        auctionTable.getSelectionModel().clearSelection();
-        auctions.clear();
-        totalCount.setText("0");
-        runningCount.setText("0");
-        openCount.setText("0");
         auctionTable.setPlaceholder(new Label("Đang tải danh sách…"));
-        emptyMessage.setText("Đang tải các phiên đấu giá…");
+        if (auctions.isEmpty()) emptyMessage.setText("Đang tải các phiên đấu giá…");
         connectionLabel.setText("Đang tải từ " + host + ":" + port + "…");
 
         loadTask = new Task<>() {
@@ -411,13 +409,20 @@ public class AuctionListController implements AutoCloseable {
             if (closed) {
                 return;
             }
+            double scrollPosition = captureMarketplaceScroll();
+            AuctionSummary selection = auctionTable.getSelectionModel().getSelectedItem();
             auctions.setAll(loadTask.getValue());
+            if (selection != null) {
+                auctions.stream().filter(a -> a.auctionId().equals(selection.auctionId())).findFirst()
+                        .ifPresent(a -> auctionTable.getSelectionModel().select(a));
+            }
             updateSummaryCounters();
             auctionTable.sort();
             connectionLabel.setText("Đã tải " + loadTask.getValue().size()
                     + " phiên từ " + host + ":" + port + ".");
             setLoading(false);
             updateEmptyState();
+            restoreMarketplaceScroll(scrollPosition);
         });
         loadTask.setOnFailed(event -> {
             if (closed) {
@@ -485,6 +490,8 @@ public class AuctionListController implements AutoCloseable {
     }
 
     private void upsertAuction(AuctionSummary updated) {
+        double scrollPosition = captureMarketplaceScroll();
+        AuctionSummary selection = auctionTable.getSelectionModel().getSelectedItem();
         int existingIndex = -1;
         for (int i = 0; i < auctions.size(); i++) {
             if (auctions.get(i).auctionId().equals(updated.auctionId())) {
@@ -499,6 +506,30 @@ public class AuctionListController implements AutoCloseable {
         }
         updateSummaryCounters();
         updateEmptyState();
+        if (selection != null) {
+            auctions.stream().filter(a -> a.auctionId().equals(selection.auctionId())).findFirst()
+                    .ifPresent(a -> auctionTable.getSelectionModel().select(a));
+        }
+        restoreMarketplaceScroll(scrollPosition);
+    }
+
+    private double captureMarketplaceScroll() {
+        double position = products.getVvalue();
+        // Move focus off a card that is about to be replaced during a refresh or push.
+        javafx.scene.Node focused = view.getScene() == null ? null : view.getScene().getFocusOwner();
+        for (javafx.scene.Node node = focused; node != null; node = node.getParent()) {
+            if (node == productGrid) {
+                products.requestFocus();
+                break;
+            }
+        }
+        return position;
+    }
+
+    private void restoreMarketplaceScroll(double position) {
+        view.applyCss();
+        view.layout();
+        products.setVvalue(position);
     }
 
     private void updateSummaryCounters() {
@@ -528,6 +559,8 @@ public class AuctionListController implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        if (roomStage != null) roomStage.close();
+        if (roomController != null) roomController.close();
         if (session != null && session.client() != null && realtimeListener != null) {
             session.client().removeRealtimeListener(realtimeListener);
         }
@@ -544,7 +577,32 @@ public class AuctionListController implements AutoCloseable {
             return;
         }
 
-        // Bản xem trước để kiểm tra chọn dòng; phòng realtime sẽ được làm sau.
+        if (session != null && !previewMode) {
+            if (roomStage != null) {
+                roomStage.toFront();
+                roomStage.requestFocus();
+                return;
+            }
+            javafx.stage.Stage stage = new javafx.stage.Stage();
+            stage.initStyle(javafx.stage.StageStyle.UNDECORATED);
+            stage.initOwner(view.getScene().getWindow());
+            roomController = new AuctionRoomController(session, selected.auctionId(), stage::close);
+            roomStage = stage;
+            stage.setTitle("Phòng đấu giá · " + selected.itemTitle());
+            stage.setScene(new javafx.scene.Scene(roomController.getView(), 1200, 850));
+            stage.setMinWidth(720);
+            stage.setMinHeight(520);
+            stage.setOnHidden(event -> {
+                roomController.close();
+                roomController = null;
+                roomStage = null;
+                if (!closed) loadAuctions();
+            });
+            stage.show();
+            roomController.playEntrance();
+            return;
+        }
+
         Alert preview = new Alert(Alert.AlertType.INFORMATION);
         AuctionTheme.apply(preview.getDialogPane());
         preview.initOwner(view.getScene().getWindow());
@@ -553,7 +611,7 @@ public class AuctionListController implements AutoCloseable {
         preview.setContentText("Mã phiên: " + selected.auctionId()
                 + "\nGiá hiện tại: " + currencyFormat.format(selected.currentHighestBid())
                 + "\nTrạng thái: " + statusText(selected.status())
-                + "\n\nĐây là bản xem trước. Phòng đấu giá realtime chưa được kết nối.");
+                + "\n\nĐăng nhập vào server để tham gia phòng đấu giá thật.");
         preview.showAndWait();
     }
 
@@ -584,11 +642,19 @@ public class AuctionListController implements AutoCloseable {
         SkinPicker picker = new SkinPicker();
         picker.selectedSkinProperty().addListener((observable, before, skin) ->
                 titleField.setText(skin == null ? "" : skin.name()));
-        dialog.getDialogPane().lookupButton(submitType).disableProperty().bind(picker.selectedSkinProperty().isNull());
-
-        TextArea descField = new TextArea();
-        descField.setPromptText("Mô tả tình trạng, độ hao mòn, sticker và thông tin khác…");
-        descField.setPrefRowCount(3);
+        ComboBox<String> wearField = new ComboBox<>();
+        wearField.setId("auction-skin-wear");
+        wearField.setAccessibleText("Độ hao mòn của skin");
+        wearField.setPromptText("Chọn độ hao mòn");
+        wearField.setMaxWidth(Double.MAX_VALUE);
+        wearField.getItems().addAll(
+                "Factory New (FN) · Mới xuất xưởng · 0.00 – 0.07",
+                "Minimal Wear (MW) · Hao mòn nhẹ · 0.07 – 0.15",
+                "Field-Tested (FT) · Đã qua sử dụng · 0.15 – 0.38",
+                "Well-Worn (WW) · Hao mòn nhiều · 0.38 – 0.45",
+                "Battle-Scarred (BS) · Hao mòn nặng · 0.45 – 1.00");
+        dialog.getDialogPane().lookupButton(submitType).disableProperty().bind(
+                picker.selectedSkinProperty().isNull().or(wearField.valueProperty().isNull()));
 
         TextField priceField = new TextField();
         priceField.setPromptText("Ví dụ: 12,000 VNĐ");
@@ -604,11 +670,12 @@ public class AuctionListController implements AutoCloseable {
         grid.setVgap(10);
         grid.setPadding(new Insets(16, 16, 8, 16));
         grid.addRow(0, new Label("Tên sản phẩm:"), titleField);
-        grid.addRow(1, new Label("Mô tả:"), descField);
+        grid.addRow(1, new Label("Độ hao mòn:"), wearField);
         grid.addRow(2, new Label("Giá khởi điểm (VNĐ):"), priceField);
         grid.addRow(3, new Label("Bước giá tối thiểu (VNĐ):"), incrementField);
         grid.addRow(4, new Label("Thời lượng (phút):"), durationField);
         GridPane.setHgrow(titleField, Priority.ALWAYS);
+        GridPane.setHgrow(wearField, Priority.ALWAYS);
 
         Label source = AuctionTheme.label("Danh mục mẫu gồm " + SkinCatalog.all().size()
                 + " skin · Ảnh tham khảo: CSGOSKINS.GG", "form-hint");
@@ -626,14 +693,14 @@ public class AuctionListController implements AutoCloseable {
             }
             if (previewMode) {
                 connectionLabel.setText("Đã chọn " + picker.getSelectedSkin().name()
-                        + " trong bản xem. Đăng nhập để đăng bán thật.");
+                        + " · " + wearField.getValue() + " trong bản xem. Đăng nhập để đăng bán thật.");
                 return;
             }
             try {
                 String title = titleField.getText().trim();
                 var skin = picker.getSelectedSkin();
                 String desc = "Skin CS2 · " + skin.group() + " / " + skin.weapon()
-                        + "\n" + descField.getText().trim();
+                        + "\nĐộ hao mòn: " + wearField.getValue();
                 // Existing server supports ART, ELECTRONICS and VEHICLE. Keep the
                 // skin subgroup in the description until a dedicated server type is added.
                 String category = "ART";
