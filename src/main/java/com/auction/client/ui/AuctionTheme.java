@@ -1,6 +1,10 @@
 package com.auction.client.ui;
 
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.scene.image.WritableImage;
 import javafx.scene.Parent;
 import javafx.scene.control.Label;
 import javafx.scene.control.Button;
@@ -80,10 +84,42 @@ public final class AuctionTheme {
     }
 
     public static HBox brand() {
-        Label mark = label("a", "brand-mark");
-        VBox name = new VBox(1, label("AUCTION", "brand-name"), label("LIVE MARKETPLACE", "brand-caption"));
-        HBox brand = new HBox(12, mark, name);
+        Image source = Branding.LOGO;
+        ImageView symbol = new ImageView(source);
+        symbol.setViewport(new Rectangle2D(source.getWidth() * 0.22, source.getHeight() * 0.30,
+                source.getWidth() * 0.55, source.getHeight() * 0.38));
+        symbol.setPreserveRatio(true);
+        symbol.setFitWidth(50);
+        symbol.setFitHeight(38);
+        symbol.setSmooth(true);
+        symbol.getStyleClass().add("bidion-symbol");
+        Label bid = label("BID", "bidion-word");
+        bid.getStyleClass().add("bidion-word-base");
+        Label ion = label("ION", "bidion-word");
+        ion.getStyleClass().add("bidion-word-accent");
+        HBox wordmark = new HBox(bid, ion);
+        wordmark.setAlignment(Pos.CENTER_LEFT);
+        VBox name = new VBox(0, wordmark,
+                label("WHERE RARITY MEETS DESTINY", "bidion-tagline"));
+        name.setAlignment(Pos.CENTER_LEFT);
+        HBox brand = new HBox(10, symbol, name);
+        brand.getStyleClass().add("bidion-brand");
+        brand.setAccessibleText("BIDION — Where rarity meets destiny");
         brand.setAlignment(Pos.CENTER_LEFT);
         return brand;
+    }
+
+    public static Image appIcon() { return Branding.ICON; }
+
+    private static final class Branding {
+        private static final Image LOGO = load("bidion-logo-blue.png");
+        private static final Image ICON = new WritableImage(LOGO.getPixelReader(),
+                (int) (LOGO.getWidth() * 0.21), (int) (LOGO.getHeight() * 0.21),
+                (int) (LOGO.getWidth() * 0.58), (int) (LOGO.getHeight() * 0.58));
+
+        private static Image load(String name) {
+            return new Image(java.util.Objects.requireNonNull(AuctionTheme.class.getResource(
+                    "/com/auction/client/branding/" + name), "Missing BIDION branding").toExternalForm());
+        }
     }
 }

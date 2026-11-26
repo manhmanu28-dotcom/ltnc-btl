@@ -78,7 +78,7 @@ public final class AuctionRoomController implements AutoCloseable {
         refresh.setOnAction(event -> service.refresh());
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox dragArea = new HBox(label("PHÒNG ĐẤU GIÁ", "ticket-title"), spacer);
+        HBox dragArea = new HBox(AuctionTheme.brand(), spacer);
         dragArea.setAlignment(Pos.CENTER_LEFT);
         dragArea.setMaxHeight(Double.MAX_VALUE);
         HBox.setHgrow(dragArea, Priority.ALWAYS);
