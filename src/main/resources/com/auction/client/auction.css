@@ -42,6 +42,12 @@
 }
 .brand-name { -fx-font-size: 16px; -fx-font-weight: bold; }
 .brand-caption { -fx-font-size: 9px; -fx-text-fill: -auction-muted; }
+.bidion-brand { -fx-padding: 0 2; -fx-alignment: center-left; }
+.bidion-symbol { -fx-effect: dropshadow(gaussian, #3563E933, 8, 0.12, 0, 1); }
+.bidion-word { -fx-font-family: "Segoe UI"; -fx-font-size: 23px; -fx-font-weight: bold; -fx-font-style: italic; }
+.bidion-word-base { -fx-text-fill: -auction-text; }
+.bidion-word-accent { -fx-text-fill: linear-gradient(to right, #5A8CFF, #3563E9); }
+.bidion-tagline { -fx-font-size: 8px; -fx-font-weight: bold; -fx-text-fill: -auction-muted; }
 .nav-caption { -fx-text-fill: -auction-muted; -fx-padding: 0 0 0 28; }
 .button {
     -fx-cursor: hand; -fx-background-color: -auction-neutral; -fx-text-fill: -auction-body;
@@ -329,3 +335,18 @@
     -fx-background-color: radial-gradient(center 50% 50%, radius 65%, #3563E928, transparent);
     -fx-background-radius: 90;
 }
+
+/* Startup sequence: silver and blue identity on a quiet, dark stage. */
+.startup-intro {
+    -fx-background-color: radial-gradient(center 50% 45%, radius 75%, #192E52, #101A2C 55%, #0B111E);
+}
+.startup-logo { -fx-effect: dropshadow(gaussian, #3563E94D, 28, 0.15, 0, 0); }
+.startup-divider { -fx-background-color: linear-gradient(to right, #3563E9, #87AEFF); -fx-background-radius: 2; }
+.startup-name {
+    -fx-font-family: "Segoe UI"; -fx-font-size: 72px; -fx-font-weight: bold;
+    -fx-font-style: italic; -fx-text-fill: #F1F5FC;
+}
+.startup-name-blue { -fx-text-fill: linear-gradient(to right, #87AEFF, #3563E9); }
+.startup-slogan { -fx-font-size: 16px; -fx-text-fill: #BCCCE5; -fx-font-weight: bold; }
+.startup-skip { -fx-background-color: transparent; -fx-text-fill: #A3B7D6; -fx-padding: 8 14; }
+.startup-skip:hover { -fx-background-color: #FFFFFF0D; -fx-text-fill: #FFFFFF; }

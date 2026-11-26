@@ -201,7 +201,7 @@ public class AuthenticationController implements AutoCloseable {
                 message.getStyleClass().add("message-error");
             }
         });
-        VBox card = new VBox(16, label("TÀI KHOẢN AUCTION", "eyebrow"), title, introduction,
+        VBox card = new VBox(16, label("TÀI KHOẢN BIDION", "eyebrow"), title, introduction,
                 formHost, message, connectionOptions);
         card.getStyleClass().add("auth-card");
         card.setMinWidth(360);
@@ -214,7 +214,7 @@ public class AuthenticationController implements AutoCloseable {
         Label description = label("Chọn skin bạn thích. Theo dõi phiên và đặt giá.", "hero-description");
         description.setWrapText(true);
         description.setMaxWidth(520);
-        VBox hero = new VBox(18, label("AUCTION / SKINS", "eyebrow"),
+        VBox hero = new VBox(18, label("BIDION / SKINS", "eyebrow"),
                 heroTitle, description, skinShowcase);
         hero.getStyleClass().add("hero-panel");
         hero.setMinWidth(0);
@@ -249,7 +249,7 @@ public class AuthenticationController implements AutoCloseable {
         view.getStyleClass().add("auth-page");
         view.setAlignment(Pos.TOP_CENTER);
         view.getChildren().addAll(navigation, body,
-                label("Auction · Đấu giá trực tuyến", "hero-footer"));
+                label("BIDION · Đấu giá trực tuyến", "hero-footer"));
         scrollPane.setFitToWidth(true);
         scrollPane.getStyleClass().add("auth-scroll");
         AuctionTheme.apply(scrollPane);

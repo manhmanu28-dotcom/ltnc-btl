@@ -588,7 +588,8 @@ public class AuctionListController implements AutoCloseable {
             stage.initOwner(view.getScene().getWindow());
             roomController = new AuctionRoomController(session, selected.auctionId(), stage::close);
             roomStage = stage;
-            stage.setTitle("Phòng đấu giá · " + selected.itemTitle());
+            stage.setTitle("BIDION · " + selected.itemTitle());
+            stage.getIcons().setAll(AuctionTheme.appIcon());
             stage.setScene(new javafx.scene.Scene(roomController.getView(), 1200, 850));
             stage.setMinWidth(720);
             stage.setMinHeight(520);
