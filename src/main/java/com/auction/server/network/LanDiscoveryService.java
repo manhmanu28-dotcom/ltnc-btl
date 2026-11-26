@@ -10,8 +10,10 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -130,23 +132,33 @@ public final class LanDiscoveryService {
             return List.of();
         }
 
-        // Nếu cùng một máy chủ vừa phản hồi qua IP LAN vừa qua 127.0.0.1 cùng tên & cùng cổng,
-        // ưu tiên giữ địa chỉ LAN để người dùng dễ thấy và chia sẻ cho máy khác.
-        List<DiscoveredServer> servers = new ArrayList<>(foundByKey.values());
-        List<DiscoveredServer> deduplicated = new ArrayList<>();
-        for (DiscoveredServer candidate : servers) {
-            if ("127.0.0.1".equals(candidate.host())) {
-                boolean hasLanDuplicate = servers.stream().anyMatch(other ->
-                        !"127.0.0.1".equals(other.host())
-                                && other.port() == candidate.port()
-                                && other.serverName().equals(candidate.serverName()));
-                if (hasLanDuplicate) {
-                    continue;
-                }
-            }
-            deduplicated.add(candidate);
+        return deduplicateServers(new ArrayList<>(foundByKey.values()));
+    }
+
+    /**
+     * Gộp các phản hồi đến từ cùng 1 máy chủ trên nhiều card mạng khác nhau (VD: Wi-Fi, VirtualBox, Loopback)
+     * và chỉ giữ lại 1 địa chỉ IP ưu tiên nhất (ưu tiên IP Wi-Fi/LAN thực thay vì card ảo hay 127.0.0.1).
+     */
+    public static List<DiscoveredServer> deduplicateServers(List<DiscoveredServer> rawServers) {
+        if (rawServers == null || rawServers.isEmpty()) {
+            return List.of();
         }
-        return deduplicated;
+        Map<String, DiscoveredServer> bestByServerIdentity = new LinkedHashMap<>();
+        for (DiscoveredServer candidate : rawServers) {
+            String identityKey = candidate.serverName().trim().toLowerCase(Locale.ROOT) + ":" + candidate.port();
+            DiscoveredServer existing = bestByServerIdentity.get(identityKey);
+            if (existing == null || isBetterAddress(candidate.host(), existing.host())) {
+                bestByServerIdentity.put(identityKey, candidate);
+            }
+        }
+        List<DiscoveredServer> result = new ArrayList<>(bestByServerIdentity.values());
+        result.sort(Comparator.comparingInt(server -> NetworkAddressUtil.ipReachabilityPriority(server.host())));
+        return result;
+    }
+
+    private static boolean isBetterAddress(String candidateHost, String existingHost) {
+        return NetworkAddressUtil.ipReachabilityPriority(candidateHost)
+                < NetworkAddressUtil.ipReachabilityPriority(existingHost);
     }
 
     static String encodeOffer(int tcpPort, int auctionCount, int connectedClients, String serverName) {
