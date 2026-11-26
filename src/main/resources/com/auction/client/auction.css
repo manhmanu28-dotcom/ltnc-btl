@@ -226,6 +226,13 @@
 .product-price { -fx-font-size: 24px; -fx-font-weight: bold; -fx-text-fill: -auction-text; }
 .product-badge { -fx-font-size: 11px; -fx-font-weight: bold; -fx-background-color: -auction-neutral; -fx-background-radius: 14; -fx-padding: 5 10; }
 .demo-page { -fx-padding: 0 28 20 28; }
+/* Live room: a compact header spans the window; only the content has side gutters. */
+.demo-page.live-room-page { -fx-padding: 0; }
+.navbar.live-room-header { -fx-padding: 8 24; -fx-spacing: 10; }
+.live-room-header .ticket-title { -fx-font-size: 14px; }
+.live-room-header .button { -fx-padding: 7 14; -fx-font-size: 12px; }
+.live-room-header .theme-toggle { -fx-padding: 5 8; }
+.demo-content.live-room-content { -fx-padding: 20 28; }
 .demo-price { -fx-font-size: 34px; -fx-text-fill: -auction-text; }
 .demo-clock { -fx-font-size: 30px; -fx-font-family: "Consolas"; }
 .demo-card .primary-button { -fx-padding: 15 20; -fx-font-size: 14px; }
