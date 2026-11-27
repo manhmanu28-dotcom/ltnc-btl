@@ -3,23 +3,32 @@ package com.auction.server;
 import com.auction.server.dao.AuctionDAO;
 import com.auction.server.dao.BidDAO;
 import com.auction.server.dao.ItemDAO;
+import com.auction.server.dao.UserDAO;
 import com.auction.server.database.DBConnection;
+import com.auction.server.model.auction.Auction;
+import com.auction.server.model.auction.AuctionStatus;
 import com.auction.server.model.auction.BidTransaction;
+import com.auction.server.model.entity.Bidder;
 import com.auction.server.model.item.ArtItem;
 import com.auction.server.model.item.ElectronicsItem;
 import com.auction.server.model.item.Item;
 import com.auction.server.model.item.ItemFactory;
 import com.auction.server.model.item.VehicleItem;
+import com.auction.server.service.AuctionManager;
+import com.auction.server.service.AuctionPersistenceService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -47,6 +56,7 @@ public class PersistenceDAOTest {
 
     @AfterEach
     void tearDown() {
+        AuctionManager.getInstance().clearAll();
         DBConnection.resetInstance();
     }
 
@@ -152,5 +162,81 @@ public class PersistenceDAOTest {
         assertEquals("bidder_two", highest.getBidderUsername());
 
         assertEquals(1, bidDAO.findByBidderId("bidder-1").size());
+    }
+
+    @Test
+    void testUserSaveDoesNotCascadeDeleteItemsAuctionsAndBids() {
+        UserDAO userDAO = new UserDAO();
+        Item item = ItemFactory.createItem(
+                ItemFactory.ItemType.ART, "item-keep", "AWP Dragon Lore", "FN", 50_000_000, Map.of());
+        assertTrue(itemDAO.saveItem(item, "seller-1"));
+        assertTrue(auctionDAO.createAuction(
+                "auc-keep", "item-keep", "seller-1", 1_000_000, 50_000_000, "RUNNING",
+                "2026-11-27T08:00:00", "2026-11-27T20:00:00"));
+        assertTrue(bidDAO.saveBid(new BidTransaction(
+                "bid-keep", "auc-keep", "bidder-1", "bidder_one", 52_000_000, LocalDateTime.now())));
+
+        // Cập nhật lại thông tin người dùng qua UserDAO.save() không được làm mất phiên hay lượt bid
+        Bidder updatedBidder = new Bidder("bidder-1", "bidder_one", "newHash", "b1@example.com", 95_000_000);
+        assertTrue(userDAO.save(updatedBidder));
+
+        assertTrue(itemDAO.findById("item-keep").isPresent());
+        assertTrue(auctionDAO.findById("auc-keep").isPresent());
+        assertEquals(1, bidDAO.countByAuctionId("auc-keep"));
+    }
+
+    @Test
+    void testLegacyMigrationAndFullServerRestartRecovery(@TempDir Path tempDir) throws Exception {
+        Path legacyDbFile = tempDir.resolve("legacy-auction.db");
+        DBConnection legacyDb = DBConnection.getInstance("jdbc:sqlite:" + legacyDbFile);
+        UserDAO legacyUsers = new UserDAO(legacyDb);
+        Bidder sellerAccount = new Bidder("u-seller", "manh_seller", "hashA", "m@example.com", 20_000_000);
+        Bidder bidderAccount = new Bidder("u-bidder", "nam_bidder", "hashB", "n@example.com", 80_000_000);
+        assertTrue(legacyUsers.create(sellerAccount));
+        assertTrue(legacyUsers.create(bidderAccount));
+        DBConnection.resetInstance();
+
+        // Mở DB bền vững mới và gộp dữ liệu từ legacy DB (giả lập re-clone / chuyển thư mục sau khi commit)
+        Path persistentDbFile = tempDir.resolve("persistent-auction.db");
+        DBConnection persistentDb = DBConnection.getInstance("jdbc:sqlite:" + persistentDbFile);
+        persistentDb.importFromSqliteFile(legacyDbFile);
+
+        UserDAO users = new UserDAO(persistentDb);
+        assertTrue(users.findByUsername("manh_seller").isPresent());
+        assertTrue(users.findByUsername("nam_bidder").isPresent());
+
+        // Khởi tạo phiên, đặt giá và lưu tự động xuống DB
+        AuctionManager manager = AuctionManager.getInstance();
+        manager.clearAll();
+        ConcurrentHashMap<String, Bidder> activeBidders = new ConcurrentHashMap<>();
+        AuctionPersistenceService.getInstance().initializeAndLoad(manager, activeBidders);
+
+        Item skin = ItemFactory.createItem(
+                ItemFactory.ItemType.ART, "item-persist", "Karambit Lore", "MW", 30_000_000, Map.of());
+        Auction liveAuction = new Auction(
+                "auc-persist", skin, sellerAccount.getId(), 1_000_000,
+                LocalDateTime.now().minusMinutes(5), LocalDateTime.now().plusMinutes(45));
+        liveAuction.startAuction();
+        manager.registerAuction(liveAuction);
+        AuctionPersistenceService.getInstance().persistCreatedAuction(liveAuction);
+
+        manager.placeBid("auc-persist", bidderAccount, 35_000_000);
+
+        // Giả lập tắt hẳn Server & xóa sạch bộ nhớ RAM sau khi commit code mới
+        manager.clearAll();
+        DBConnection.resetInstance();
+
+        // Khởi động lại Server trên cùng file persistent DB -> toàn bộ tài khoản, phiên, giá thắng & lịch sử phải còn nguyên
+        DBConnection.getInstance("jdbc:sqlite:" + persistentDbFile);
+        ConcurrentHashMap<String, Bidder> restartedBidders = new ConcurrentHashMap<>();
+        int loaded = AuctionPersistenceService.getInstance().initializeAndLoad(manager, restartedBidders);
+
+        assertEquals(1, loaded);
+        assertEquals(2, new UserDAO().findAll().size());
+        Auction restored = manager.getAuctionOrThrow("auc-persist");
+        assertEquals(AuctionStatus.RUNNING, restored.getStatus());
+        assertEquals(35_000_000, restored.getCurrentHighestBid());
+        assertEquals("u-bidder", restored.getCurrentWinnerId());
+        assertEquals(1, restored.getBidHistory().size());
     }
 }
