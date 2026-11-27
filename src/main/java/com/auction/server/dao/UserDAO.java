@@ -54,35 +54,49 @@ public class UserDAO {
             throw new IllegalArgumentException("User không được null!");
         }
 
-        String sql = (replace ? "INSERT OR REPLACE" : "INSERT")
-                + " INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        // Dùng ON CONFLICT DO UPDATE thay vì INSERT OR REPLACE để KHÔNG kích hoạt
+        // ON DELETE CASCADE làm xóa sạch items, auctions và bid_transactions của người dùng!
+        String sql = replace
+                ? "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
+                  + "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                  + "ON CONFLICT(id) DO UPDATE SET "
+                  + "username = excluded.username, "
+                  + "password_hash = excluded.password_hash, "
+                  + "email = excluded.email, "
+                  + "role = excluded.role, "
+                  + "balance = excluded.balance, "
+                  + "rating = excluded.rating"
+                : "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
+                  + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, user.getId());
+                    stmt.setString(2, user.getUsername());
+                    stmt.setString(3, user.getPasswordHash());
+                    stmt.setString(4, user.getEmail());
+                    stmt.setString(5, user.getRoleName());
 
-            stmt.setString(1, user.getId());
-            stmt.setString(2, user.getUsername());
-            stmt.setString(3, user.getPasswordHash());
-            stmt.setString(4, user.getEmail());
-            stmt.setString(5, user.getRoleName());
+                    if (user instanceof Bidder) {
+                        stmt.setDouble(6, ((Bidder) user).getBalance());
+                        stmt.setDouble(7, 5.0);
+                    } else if (user instanceof Seller) {
+                        stmt.setDouble(6, 0.0);
+                        stmt.setDouble(7, ((Seller) user).getRating());
+                    } else {
+                        stmt.setDouble(6, 0.0);
+                        stmt.setDouble(7, 5.0);
+                    }
 
-            if (user instanceof Bidder) {
-                stmt.setDouble(6, ((Bidder) user).getBalance());
-                stmt.setDouble(7, 5.0);
-            } else if (user instanceof Seller) {
-                stmt.setDouble(6, 0.0);
-                stmt.setDouble(7, ((Seller) user).getRating());
-            } else {
-                stmt.setDouble(6, 0.0);
-                stmt.setDouble(7, 5.0);
+                    stmt.setInt(8, 0); // Mặc định không bị khóa
+
+                    return stmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi lưu người dùng vào Database: " + e.getMessage(), e);
             }
-
-            stmt.setInt(8, 0); // Mặc định không bị khóa
-
-            return stmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi lưu người dùng vào Database: " + e.getMessage(), e);
         }
     }
 

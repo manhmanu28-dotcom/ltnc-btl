@@ -27,23 +27,50 @@ public class BidDAO {
         if (bid == null) {
             return false;
         }
-        String sql = "INSERT INTO bid_transactions (id, auction_id, bidder_id, bidder_username, bid_amount, bid_time) "
+        String sql = "INSERT OR IGNORE INTO bid_transactions (id, auction_id, bidder_id, bidder_username, bid_amount, bid_time) "
                 + "VALUES (?, ?, ?, ?, ?, ?)";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, bid.getId());
-                pstmt.setString(2, bid.getAuctionId());
-                pstmt.setString(3, bid.getBidderId());
-                pstmt.setString(4, bid.getBidderUsername());
-                pstmt.setDouble(5, bid.getAmount());
-                pstmt.setString(6, bid.getBidTime().toString());
-                return pstmt.executeUpdate() > 0;
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, bid.getId());
+                    pstmt.setString(2, bid.getAuctionId());
+                    pstmt.setString(3, bid.getBidderId());
+                    pstmt.setString(4, bid.getBidderUsername());
+                    pstmt.setDouble(5, bid.getAmount());
+                    pstmt.setString(6, bid.getBidTime().toString());
+                    return pstmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                System.err.println("[BidDAO] Lỗi khi lưu giao dịch đặt giá: " + e.getMessage());
+                return false;
             }
-        } catch (SQLException e) {
-            System.err.println("[BidDAO] Lỗi khi lưu giao dịch đặt giá: " + e.getMessage());
-            return false;
         }
+    }
+
+    /** Lấy lịch sử đặt giá theo đúng trình tự thời gian tăng dần để khôi phục phiên khi khởi động lại Server. */
+    public List<BidTransaction> findChronologicalByAuctionId(String auctionId) {
+        List<BidTransaction> result = new ArrayList<>();
+        String sql = "SELECT id, auction_id, bidder_id, bidder_username, bid_amount, bid_time "
+                + "FROM bid_transactions WHERE auction_id = ? ORDER BY bid_time ASC, bid_amount ASC";
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, auctionId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            result.add(mapRow(rs));
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                System.err.println("[BidDAO] Lỗi khi đọc lịch sử đặt giá theo thứ tự thời gian: " + e.getMessage());
+            }
+        }
+        return result;
     }
 
     /** Lấy lịch sử đặt giá của một phiên (giá cao nhất lên đầu). */

@@ -735,6 +735,54 @@ public class Auction extends BaseEntity {
         }
     }
 
+    public Bidder getCurrentWinner() {
+        lock.lock();
+        try {
+            return currentWinner;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Khôi phục trạng thái phiên và lịch sử đặt giá từ SQLite khi khởi động lại Server.
+     */
+    public void restorePersistedState(AuctionStatus restoredStatus,
+                                      double restoredHighestBid,
+                                      String restoredWinnerId,
+                                      String restoredWinnerUsername,
+                                      Bidder restoredWinner,
+                                      List<BidTransaction> chronologicalBids) {
+        lock.lock();
+        try {
+            this.status = (restoredStatus != null) ? restoredStatus : AuctionStatus.OPEN;
+            if (Double.isFinite(restoredHighestBid) && restoredHighestBid >= this.item.getStartingPrice()) {
+                this.currentHighestBid = restoredHighestBid;
+            }
+            this.currentWinnerId = (restoredWinnerId != null && !restoredWinnerId.isBlank())
+                    ? restoredWinnerId.trim() : null;
+            this.currentWinnerUsername = (restoredWinnerUsername != null && !restoredWinnerUsername.isBlank())
+                    ? restoredWinnerUsername.trim() : null;
+
+            releaseCurrentWinnerHoldInternal();
+            this.currentWinner = restoredWinner;
+            if (restoredWinner != null && this.currentWinnerId != null
+                    && (this.status == AuctionStatus.RUNNING || this.status == AuctionStatus.FINISHED)
+                    && this.currentHighestBid > 0) {
+                if (restoredWinner.tryHold(this.currentHighestBid)) {
+                    this.currentHeldAmount = this.currentHighestBid;
+                }
+            }
+
+            this.bidHistory.clear();
+            if (chronologicalBids != null) {
+                this.bidHistory.addAll(chronologicalBids);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
     @Override
     public String printInfo() {
         lock.lock();

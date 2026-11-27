@@ -15,6 +15,7 @@ import com.auction.server.network.protocol.JsonProtocolUtil;
 import com.auction.server.network.protocol.SocketRequest;
 import com.auction.server.network.protocol.SocketResponse;
 import com.auction.server.service.AuctionManager;
+import com.auction.server.service.AuctionPersistenceService;
 
 import java.io.BufferedReader;
 import java.io.Closeable;
@@ -356,6 +357,7 @@ public class ClientHandler implements Runnable, Closeable {
         }
 
         auctionManager.registerAuction(auction);
+        AuctionPersistenceService.getInstance().persistCreatedAuction(auction);
 
         SocketResponse response = SocketResponse.ok(request, "Tạo phiên đấu giá mới thành công!")
                 .putData("auction", JsonProtocolUtil.toAuctionDto(auction, false));
