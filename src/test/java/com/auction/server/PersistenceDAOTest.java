@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -238,5 +239,42 @@ public class PersistenceDAOTest {
         assertEquals(35_000_000, restored.getCurrentHighestBid());
         assertEquals("u-bidder", restored.getCurrentWinnerId());
         assertEquals(1, restored.getBidHistory().size());
+    }
+
+    @Test
+    void testCloudDatabaseConfigNormalizationAndPropertiesFile(@TempDir Path tempDir) throws Exception {
+        // 1. Chuỗi URI copy trực tiếp từ Neon / Supabase (PostgreSQL)
+        DBConnection.DatabaseConfig neon = DBConnection.normalizeConfig(
+                "postgresql://neondb_owner:my%40secret@ep-cool-123.ap-southeast-1.aws.neon.tech/neondb?sslmode=require",
+                null, null);
+        assertEquals(DBConnection.Dialect.POSTGRESQL, neon.dialect());
+        assertTrue(neon.isCloudDatabase());
+        assertEquals("jdbc:postgresql://ep-cool-123.ap-southeast-1.aws.neon.tech:5432/neondb?sslmode=require",
+                neon.jdbcUrl());
+        assertEquals("neondb_owner", neon.username());
+        assertEquals("my@secret", neon.password());
+
+        // 2. Chuỗi URI / JDBC từ TiDB Cloud / Aiven (MySQL)
+        DBConnection.DatabaseConfig tidb = DBConnection.normalizeConfig(
+                "mysql://tidb_user:tidb_pass@gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/test?sslMode=VERIFY_IDENTITY",
+                null, null);
+        assertEquals(DBConnection.Dialect.MYSQL, tidb.dialect());
+        assertTrue(tidb.isCloudDatabase());
+        assertEquals("jdbc:mysql://gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/test?sslMode=VERIFY_IDENTITY",
+                tidb.jdbcUrl());
+        assertEquals("tidb_user", tidb.username());
+        assertEquals("tidb_pass", tidb.password());
+
+        // 3. Đọc cấu hình từ tệp db.properties
+        Path props = tempDir.resolve("db.properties");
+        Files.writeString(props,
+                "db.url=jdbc:postgresql://db.example.supabase.co:5432/postgres?sslmode=require\n"
+                        + "db.user=postgres\n"
+                        + "db.password=super_secret_123\n");
+        DBConnection.DatabaseConfig fromFile = DBConnection.readConfigFile(props);
+        assertNotNull(fromFile);
+        assertEquals(DBConnection.Dialect.POSTGRESQL, fromFile.dialect());
+        assertEquals("postgres", fromFile.username());
+        assertEquals("super_secret_123", fromFile.password());
     }
 }

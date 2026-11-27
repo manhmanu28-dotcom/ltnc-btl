@@ -18,12 +18,7 @@ import java.util.Optional;
 
 /**
  * UserDAO: Tầng truy xuất dữ liệu người dùng (Yêu cầu 3.4 & Thành viên 4).
- *
- * Hỗ trợ:
- * - Đa hình hóa thực thể User (Admin, Seller, Bidder).
- * - Mã hóa mật khẩu an toàn với PasswordUtil.
- * - Khóa/mở khóa tài khoản (Admin moderation).
- * - Cập nhật số dư Bidder, điểm uy tín Seller.
+ * Tương thích đồng thời SQLite, PostgreSQL (Neon/Supabase) và MySQL (TiDB Cloud/Aiven).
  */
 public class UserDAO {
 
@@ -38,7 +33,7 @@ public class UserDAO {
     }
 
     /**
-     * Lưu thông tin người dùng mới vào Database.
+     * Lưu thông tin người dùng mới hoặc cập nhật người dùng hiện có vào Database.
      */
     public boolean save(User user) {
         return writeUser(user, true);
@@ -54,21 +49,7 @@ public class UserDAO {
             throw new IllegalArgumentException("User không được null!");
         }
 
-        // Dùng ON CONFLICT DO UPDATE thay vì INSERT OR REPLACE để KHÔNG kích hoạt
-        // ON DELETE CASCADE làm xóa sạch items, auctions và bid_transactions của người dùng!
-        String sql = replace
-                ? "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
-                  + "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                  + "ON CONFLICT(id) DO UPDATE SET "
-                  + "username = excluded.username, "
-                  + "password_hash = excluded.password_hash, "
-                  + "email = excluded.email, "
-                  + "role = excluded.role, "
-                  + "balance = excluded.balance, "
-                  + "rating = excluded.rating"
-                : "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
-                  + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-
+        String sql = buildWriteUserSql(dbConnection.getDialect(), replace);
         synchronized (dbConnection) {
             try {
                 Connection conn = dbConnection.getConnection();
@@ -79,25 +60,52 @@ public class UserDAO {
                     stmt.setString(4, user.getEmail());
                     stmt.setString(5, user.getRoleName());
 
-                    if (user instanceof Bidder) {
-                        stmt.setDouble(6, ((Bidder) user).getBalance());
+                    if (user instanceof Bidder bidder) {
+                        stmt.setDouble(6, bidder.getBalance());
                         stmt.setDouble(7, 5.0);
-                    } else if (user instanceof Seller) {
+                    } else if (user instanceof Seller seller) {
                         stmt.setDouble(6, 0.0);
-                        stmt.setDouble(7, ((Seller) user).getRating());
+                        stmt.setDouble(7, seller.getRating());
                     } else {
                         stmt.setDouble(6, 0.0);
                         stmt.setDouble(7, 5.0);
                     }
 
-                    stmt.setInt(8, 0); // Mặc định không bị khóa
-
+                    stmt.setInt(8, 0);
                     return stmt.executeUpdate() > 0;
                 }
             } catch (SQLException e) {
                 throw new RuntimeException("Lỗi lưu người dùng vào Database: " + e.getMessage(), e);
             }
         }
+    }
+
+    static String buildWriteUserSql(DBConnection.Dialect dialect, boolean replace) {
+        if (!replace) {
+            return "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        }
+        if (dialect == DBConnection.Dialect.MYSQL) {
+            return "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    + "ON DUPLICATE KEY UPDATE "
+                    + "username = VALUES(username), "
+                    + "password_hash = VALUES(password_hash), "
+                    + "email = VALUES(email), "
+                    + "role = VALUES(role), "
+                    + "balance = VALUES(balance), "
+                    + "rating = VALUES(rating)";
+        }
+        // SQLite & PostgreSQL đều hỗ trợ chuẩn ON CONFLICT(id) DO UPDATE (không kích hoạt ON DELETE CASCADE)
+        return "INSERT INTO users (id, username, password_hash, email, role, balance, rating, is_locked) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                + "ON CONFLICT(id) DO UPDATE SET "
+                + "username = excluded.username, "
+                + "password_hash = excluded.password_hash, "
+                + "email = excluded.email, "
+                + "role = excluded.role, "
+                + "balance = excluded.balance, "
+                + "rating = excluded.rating";
     }
 
     /**
@@ -109,17 +117,20 @@ public class UserDAO {
         }
 
         String sql = "SELECT * FROM users WHERE id = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, id.trim());
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(mapResultSetToUser(rs));
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, id.trim());
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next()) {
+                            return Optional.of(mapResultSetToUser(rs));
+                        }
+                    }
                 }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi tìm kiếm người dùng theo ID: " + e.getMessage(), e);
             }
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi tìm kiếm người dùng theo ID: " + e.getMessage(), e);
         }
         return Optional.empty();
     }
@@ -133,17 +144,20 @@ public class UserDAO {
         }
 
         String sql = "SELECT * FROM users WHERE username = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, username.trim());
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(mapResultSetToUser(rs));
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, username.trim());
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next()) {
+                            return Optional.of(mapResultSetToUser(rs));
+                        }
+                    }
                 }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi tìm kiếm người dùng theo username: " + e.getMessage(), e);
             }
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi tìm kiếm người dùng theo username: " + e.getMessage(), e);
         }
         return Optional.empty();
     }
@@ -155,15 +169,18 @@ public class UserDAO {
         List<User> list = new ArrayList<>();
         String sql = "SELECT * FROM users ORDER BY created_at DESC";
 
-        try (Connection conn = dbConnection.getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-
-            while (rs.next()) {
-                list.add(mapResultSetToUser(rs));
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        list.add(mapResultSetToUser(rs));
+                    }
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi truy vấn toàn bộ người dùng: " + e.getMessage(), e);
             }
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi truy vấn toàn bộ người dùng: " + e.getMessage(), e);
         }
         return list;
     }
@@ -193,14 +210,17 @@ public class UserDAO {
      */
     public boolean updateBalance(String userId, double newBalance) {
         String sql = "UPDATE users SET balance = ? WHERE id = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setDouble(1, Math.max(0, newBalance));
-            stmt.setString(2, userId);
-            return stmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi cập nhật số dư Bidder: " + e.getMessage(), e);
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setDouble(1, Math.max(0, newBalance));
+                    stmt.setString(2, userId);
+                    return stmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi cập nhật số dư Bidder: " + e.getMessage(), e);
+            }
         }
     }
 
@@ -209,14 +229,17 @@ public class UserDAO {
      */
     public boolean updateRating(String sellerId, double rating) {
         String sql = "UPDATE users SET rating = ? WHERE id = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setDouble(1, Math.max(0.0, Math.min(5.0, rating)));
-            stmt.setString(2, sellerId);
-            return stmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi cập nhật rating Seller: " + e.getMessage(), e);
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setDouble(1, Math.max(0.0, Math.min(5.0, rating)));
+                    stmt.setString(2, sellerId);
+                    return stmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi cập nhật rating Seller: " + e.getMessage(), e);
+            }
         }
     }
 
@@ -225,14 +248,17 @@ public class UserDAO {
      */
     public boolean setUserLocked(String userId, boolean locked) {
         String sql = "UPDATE users SET is_locked = ? WHERE id = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setInt(1, locked ? 1 : 0);
-            stmt.setString(2, userId);
-            return stmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi thiết lập trạng thái khóa người dùng: " + e.getMessage(), e);
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setInt(1, locked ? 1 : 0);
+                    stmt.setString(2, userId);
+                    return stmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi thiết lập trạng thái khóa người dùng: " + e.getMessage(), e);
+            }
         }
     }
 
@@ -241,17 +267,20 @@ public class UserDAO {
      */
     public boolean isUserLocked(String userId) {
         String sql = "SELECT is_locked FROM users WHERE id = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, userId);
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getInt("is_locked") == 1;
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, userId);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next()) {
+                            return rs.getInt("is_locked") == 1;
+                        }
+                    }
                 }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi kiểm tra trạng thái khóa người dùng: " + e.getMessage(), e);
             }
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi kiểm tra trạng thái khóa người dùng: " + e.getMessage(), e);
         }
         return false;
     }
@@ -261,13 +290,16 @@ public class UserDAO {
      */
     public boolean delete(String id) {
         String sql = "DELETE FROM users WHERE id = ?";
-        try (Connection conn = dbConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, id);
-            return stmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            throw new RuntimeException("Lỗi xóa người dùng: " + e.getMessage(), e);
+        synchronized (dbConnection) {
+            try {
+                Connection conn = dbConnection.getConnection();
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, id);
+                    return stmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("Lỗi xóa người dùng: " + e.getMessage(), e);
+            }
         }
     }
 
@@ -294,4 +326,3 @@ public class UserDAO {
         }
     }
 }
-

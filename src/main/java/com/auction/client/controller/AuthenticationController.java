@@ -5,12 +5,7 @@ import com.auction.client.service.AuthenticationClientService;
 import com.auction.client.service.ConnectionPreferences;
 import com.auction.client.ui.AuctionTheme;
 import com.auction.client.ui.PasswordInput;
-import com.auction.client.ui.ServerBrowserDialog;
 import com.auction.client.ui.SkinShowcase;
-import com.auction.server.network.AuctionServer;
-import com.auction.server.network.HostedServerManager;
-import com.auction.server.network.NetworkAddressUtil;
-import com.auction.server.network.ServerDirectoryEntry;
 import com.auction.server.network.ServerEndpoint;
 import com.auction.server.network.protocol.SocketResponse;
 import javafx.concurrent.Task;
@@ -19,10 +14,6 @@ import javafx.geometry.Pos;
 import javafx.geometry.VPos;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
-import javafx.scene.control.ButtonBar;
-import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
-import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
@@ -41,18 +32,12 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 /**
- * Màn hình đăng ký và đăng nhập qua Socket với 2 nút nổi bật:
- * 1. "Tạo Server": Mở máy chủ mới và tự động chia sẻ cho người dùng cùng Wi-Fi lẫn khác Wi-Fi.
- * 2. "Tham gia Server": Hiển thị toàn bộ các Server đang hoạt động do bạn hoặc người khác tạo ra.
+ * Màn hình đăng ký và đăng nhập qua Socket kết nối trực tiếp vào máy chủ dùng chung duy nhất
+ * (được cấu hình trong auction-server.properties hoặc tham số --server).
  */
 public class AuthenticationController implements AutoCloseable {
     private final VBox view = new VBox(16);
     private final ScrollPane scrollPane = new ScrollPane(view);
-    private final Button createServerButton = new Button("+ Tạo Server");
-    private final Button joinServerButton = new Button("Tham gia Server");
-    private final Button stopServerButton = new Button("Dừng Server");
-    private final Label activeServerLabel = label("", "field-caption");
-    private final Label connectionStatus = label("", "form-hint");
     private final TextField loginName = new TextField();
     private final PasswordField loginPassword = new PasswordField();
     private final TextField registerName = new TextField();
@@ -64,7 +49,6 @@ public class AuthenticationController implements AutoCloseable {
     private final PasswordInput confirmationInput = new PasswordInput(confirmation);
     private final Label message = new Label();
     private final VBox formHost = new VBox();
-    private final VBox serverPanel;
     private final SkinShowcase skinShowcase = new SkinShowcase();
     private Consumer<Boolean> showForm;
     private final AuthenticationClientService service = new AuthenticationClientService();
@@ -74,58 +58,25 @@ public class AuthenticationController implements AutoCloseable {
         return thread;
     });
     private final Consumer<AuthenticatedSession> onLogin;
-    private ServerEndpoint selectedEndpoint;
-    private String selectedServerName;
-    private Task<?> pendingTask;
+    private final ServerEndpoint targetEndpoint;
+    private Task<SocketResponse> pendingTask;
     private boolean closed;
 
     public AuthenticationController(Consumer<AuthenticatedSession> onLogin) {
-        this(onLogin, null, ConnectionPreferences.loadLastEndpoint());
+        this(onLogin, null, ConnectionPreferences.resolveInitialEndpoint(null));
     }
 
     public AuthenticationController(Consumer<AuthenticatedSession> onLogin, Runnable onDemo) {
-        this(onLogin, onDemo, ConnectionPreferences.loadLastEndpoint());
+        this(onLogin, onDemo, ConnectionPreferences.resolveInitialEndpoint(null));
     }
 
     public AuthenticationController(Consumer<AuthenticatedSession> onLogin, Runnable onDemo, ServerEndpoint initialEndpoint) {
         this.onLogin = onLogin;
-        this.selectedEndpoint = initialEndpoint != null ? initialEndpoint : ConnectionPreferences.DEFAULT_ENDPOINT;
-        this.selectedServerName = selectedEndpoint.toAddress();
+        this.targetEndpoint = initialEndpoint != null ? initialEndpoint : ConnectionPreferences.DEFAULT_ENDPOINT;
 
         Label title = label("Chào mừng trở lại", "card-title");
-        Label introduction = label("Chọn hoặc tạo Server đấu giá, sau đó đăng nhập để tham gia.", "muted");
+        Label introduction = label("Đăng nhập để khám phá các phiên đấu giá.", "muted");
         introduction.setWrapText(true);
-
-        // Khu vực 2 nút chính: Tạo Server & Tham gia Server
-        createServerButton.setId("auth-create-server-button");
-        createServerButton.getStyleClass().add("primary-button");
-        createServerButton.setMaxWidth(Double.MAX_VALUE);
-        createServerButton.setOnAction(event -> showCreateServerDialog());
-
-        joinServerButton.setId("auth-join-server-button");
-        joinServerButton.getStyleClass().add("secondary-button");
-        joinServerButton.setMaxWidth(Double.MAX_VALUE);
-        joinServerButton.setOnAction(event -> openServerBrowser());
-
-        stopServerButton.getStyleClass().add("ghost-button");
-        stopServerButton.setOnAction(event -> stopHostedServer());
-        stopServerButton.setVisible(false);
-        stopServerButton.setManaged(false);
-
-        HBox.setHgrow(createServerButton, Priority.ALWAYS);
-        HBox.setHgrow(joinServerButton, Priority.ALWAYS);
-        HBox serverButtons = new HBox(10, createServerButton, joinServerButton);
-        serverButtons.setAlignment(Pos.CENTER_LEFT);
-
-        activeServerLabel.setWrapText(true);
-        connectionStatus.setWrapText(true);
-        HBox serverHeader = new HBox(8, label("MÁY CHỦ ĐẤU GIÁ", "eyebrow"), new Region(), stopServerButton);
-        HBox.setHgrow(serverHeader.getChildren().get(1), Priority.ALWAYS);
-        serverHeader.setAlignment(Pos.CENTER_LEFT);
-
-        serverPanel = new VBox(8, serverHeader, serverButtons, activeServerLabel, connectionStatus);
-        serverPanel.getStyleClass().add("summary-card");
-        refreshServerUi();
 
         Button login = new Button("Đăng nhập");
         login.setId("auth-login-button");
@@ -186,7 +137,7 @@ public class AuthenticationController implements AutoCloseable {
             formHost.getChildren().setAll(registering ? registerForm : loginForm);
             title.setText(registering ? "Tạo tài khoản mới" : "Chào mừng trở lại");
             introduction.setText(registering ? "Một tài khoản. Khởi đầu nhiều cơ hội."
-                    : "Chọn hoặc tạo Server đấu giá, sau đó đăng nhập để tham gia.");
+                    : "Đăng nhập để khám phá các phiên đấu giá.");
             message.setText("");
         };
         showForm.accept(false);
@@ -201,12 +152,16 @@ public class AuthenticationController implements AutoCloseable {
                 message.getStyleClass().add("message-error");
             }
         });
-        VBox card = new VBox(14, label("TÀI KHOẢN BIDION", "eyebrow"), title, introduction,
-                serverPanel, formHost, message);
+
+        Label serverCaption = label("Máy chủ BIDION · " + targetEndpoint.toAddress(), "form-hint");
+        serverCaption.setWrapText(true);
+
+        VBox card = new VBox(16, label("TÀI KHOẢN BIDION", "eyebrow"), title, introduction,
+                formHost, message, serverCaption);
         card.getStyleClass().add("auth-card");
-        card.setMinWidth(380);
-        card.setPrefWidth(440);
-        card.setMaxWidth(460);
+        card.setMinWidth(360);
+        card.setPrefWidth(420);
+        card.setMaxWidth(440);
 
         Label heroTitle = label("Find your\nnext skin.", "hero-title");
         heroTitle.setWrapText(true);
@@ -233,7 +188,7 @@ public class AuthenticationController implements AutoCloseable {
             GridPane.setColumnIndex(card, compact ? 0 : 1);
             GridPane.setRowIndex(card, compact ? 1 : 0);
             heroTitle.setStyle(compact ? "-fx-font-size: 30px;" : "");
-            card.setMaxWidth(compact ? 600 : 460);
+            card.setMaxWidth(compact ? 600 : 440);
         });
         Button signIn = new Button("Đăng nhập");
         signIn.getStyleClass().add("ghost-button");
@@ -255,203 +210,6 @@ public class AuthenticationController implements AutoCloseable {
         AuctionTheme.apply(scrollPane);
     }
 
-    private void refreshServerUi() {
-        HostedServerManager.HostedServerInfo hosted = HostedServerManager.getInstance().currentInfo();
-        if (hosted != null) {
-            ServerDirectoryEntry entry = hosted.entry();
-            this.selectedEndpoint = new ServerEndpoint("127.0.0.1", entry.lanPort());
-            this.selectedServerName = entry.serverName();
-            createServerButton.setText("Server đang chạy");
-            createServerButton.setDisable(true);
-            stopServerButton.setVisible(true);
-            stopServerButton.setManaged(true);
-
-            StringBuilder detail = new StringBuilder("Đang chạy: ")
-                    .append(entry.serverName())
-                    .append(" · LAN: ").append(entry.lanHost()).append(":").append(entry.lanPort());
-            if (entry.hasPublicEndpoint()) {
-                detail.append(" · Internet: ").append(entry.publicHost()).append(":").append(entry.publicPort());
-            }
-            activeServerLabel.setText(detail.toString());
-
-            if (entry.hasPublicEndpoint() && hosted.registryPublished()) {
-                setConnectionStatus("✓ Mọi người cùng Wi-Fi hay khác Wi-Fi đều sẽ thấy Server này khi bấm Tham gia Server.", "message-success");
-            } else if (hosted.publicTunnelWarning() != null) {
-                setConnectionStatus("Đang chạy cho cùng Wi-Fi (chưa mở được đường hầm khác Wi-Fi: "
-                        + hosted.publicTunnelWarning() + ").", "message-error");
-            } else {
-                setConnectionStatus("✓ Server đã sẵn sàng cho người dùng trong cùng mạng Wi-Fi.", "message-success");
-            }
-            return;
-        }
-
-        createServerButton.setText("+ Tạo Server");
-        createServerButton.setDisable(false);
-        stopServerButton.setVisible(false);
-        stopServerButton.setManaged(false);
-        activeServerLabel.setText("Đang chọn: " + selectedServerName
-                + (selectedServerName.equals(selectedEndpoint.toAddress()) ? "" : " (" + selectedEndpoint.toAddress() + ")"));
-        if (connectionStatus.getText() == null || connectionStatus.getText().isBlank()) {
-            setConnectionStatus("Bấm Tạo Server để mở phòng mới hoặc Tham gia Server để xem danh sách tất cả Server.", null);
-        }
-    }
-
-    private void showCreateServerDialog() {
-        if (closed || (pendingTask != null && pendingTask.isRunning())) {
-            return;
-        }
-        Dialog<ButtonType> dialog = new Dialog<>();
-        dialog.setTitle("Tạo Server đấu giá mới");
-        dialog.setHeaderText("Khởi chạy Server trên máy của bạn để mọi người cùng tham gia.");
-        if (scrollPane.getScene() != null) {
-            dialog.initOwner(scrollPane.getScene().getWindow());
-        }
-        AuctionTheme.apply(dialog.getDialogPane());
-
-        ButtonType startType = new ButtonType("Khởi tạo Server", ButtonBar.ButtonData.OK_DONE);
-        dialog.getDialogPane().getButtonTypes().addAll(startType, ButtonType.CANCEL);
-
-        TextField nameField = new TextField("Server của " + NetworkAddressUtil.resolveLocalHostName());
-        nameField.setPromptText("Nhập tên hiển thị cho Server");
-        TextField portField = new TextField(String.valueOf(AuctionServer.DEFAULT_PORT));
-        portField.setPromptText("Mặc định 8888");
-        CheckBox publicCheckBox = new CheckBox("Mở công khai cho người khác mạng Wi-Fi / 4G (Internet)");
-        publicCheckBox.setSelected(true);
-        publicCheckBox.setWrapText(true);
-
-        Label hint = label("Server sẽ tự động xuất hiện trong mục 'Tham gia Server' của mọi người (cả cùng Wi-Fi lẫn khác Wi-Fi).", "form-hint");
-        hint.setWrapText(true);
-
-        GridPane grid = new GridPane();
-        grid.setHgap(12);
-        grid.setVgap(10);
-        grid.setPadding(new Insets(12, 8, 8, 8));
-        grid.addRow(0, new Label("Tên Server:"), nameField);
-        grid.addRow(1, new Label("Cổng TCP:"), portField);
-        GridPane.setHgrow(nameField, Priority.ALWAYS);
-
-        VBox content = new VBox(12, grid, publicCheckBox, hint);
-        content.setPrefWidth(460);
-        dialog.getDialogPane().setContent(content);
-
-        dialog.showAndWait().ifPresent(result -> {
-            if (result != startType) {
-                return;
-            }
-            int requestedPort;
-            try {
-                requestedPort = Integer.parseInt(portField.getText().trim());
-                if (requestedPort < 1 || requestedPort > 65535) {
-                    throw new IllegalArgumentException();
-                }
-            } catch (IllegalArgumentException error) {
-                setConnectionStatus("Cổng TCP phải nằm trong khoảng 1–65535.", "message-error");
-                return;
-            }
-            String serverName = nameField.getText().trim();
-            boolean enablePublic = publicCheckBox.isSelected();
-            startHostedServer(serverName, requestedPort, enablePublic);
-        });
-    }
-
-    private void startHostedServer(String serverName, int requestedPort, boolean enablePublic) {
-        setBusy(true);
-        setConnectionStatus(enablePublic
-                ? "Đang khởi tạo Server & mở đường hầm công khai cho khác Wi-Fi (khoảng 3–8 giây)…"
-                : "Đang khởi tạo Server đấu giá…", null);
-
-        Task<HostedServerManager.HostedServerInfo> task = new Task<>() {
-            @Override
-            protected HostedServerManager.HostedServerInfo call() throws Exception {
-                return HostedServerManager.getInstance().startServer(serverName, requestedPort, enablePublic);
-            }
-        };
-        pendingTask = task;
-        task.setOnSucceeded(event -> {
-            if (closed) {
-                return;
-            }
-            setBusy(false);
-            pendingTask = null;
-            HostedServerManager.HostedServerInfo info = task.getValue();
-            ConnectionPreferences.save(new ServerEndpoint("127.0.0.1", info.entry().lanPort()));
-            refreshServerUi();
-            loginName.requestFocus();
-        });
-        task.setOnFailed(event -> {
-            if (closed) {
-                return;
-            }
-            setBusy(false);
-            pendingTask = null;
-            String err = task.getException() != null ? task.getException().getMessage() : "Không rõ nguyên nhân";
-            setConnectionStatus("Không thể tạo Server: " + err, "message-error");
-            refreshServerUi();
-        });
-        executor.execute(task);
-    }
-
-    private void stopHostedServer() {
-        if (closed || (pendingTask != null && pendingTask.isRunning())) {
-            return;
-        }
-        setBusy(true);
-        setConnectionStatus("Đang dừng Server…", null);
-        Task<Void> task = new Task<>() {
-            @Override
-            protected Void call() {
-                HostedServerManager.getInstance().stopServer();
-                return null;
-            }
-        };
-        pendingTask = task;
-        task.setOnSucceeded(event -> {
-            if (closed) {
-                return;
-            }
-            setBusy(false);
-            pendingTask = null;
-            setConnectionStatus("Đã dừng Server của bạn.", null);
-            refreshServerUi();
-        });
-        task.setOnFailed(event -> {
-            if (closed) {
-                return;
-            }
-            setBusy(false);
-            pendingTask = null;
-            refreshServerUi();
-        });
-        executor.execute(task);
-    }
-
-    private void openServerBrowser() {
-        if (closed || (pendingTask != null && pendingTask.isRunning())) {
-            return;
-        }
-        ServerBrowserDialog.showAndWait(scrollPane.getScene() != null ? scrollPane.getScene().getWindow() : null)
-                .ifPresent(selection -> {
-                    this.selectedEndpoint = selection.endpoint();
-                    this.selectedServerName = selection.serverName();
-                    ConnectionPreferences.save(selection.endpoint());
-                    activeServerLabel.setText("Đang chọn: " + selection.serverName()
-                            + (selection.serverName().equals(selection.endpoint().toAddress())
-                                ? ""
-                                : " (" + selection.endpoint().toAddress() + ")"));
-                    setConnectionStatus(selection.statusSummary(), "message-success");
-                    message.setText("");
-                    loginName.requestFocus();
-                });
-    }
-
-    private void setConnectionStatus(String text, String styleClass) {
-        connectionStatus.getStyleClass().removeAll("message-error", "message-success");
-        if (styleClass != null) {
-            connectionStatus.getStyleClass().add(styleClass);
-        }
-        connectionStatus.setText(text);
-    }
-
     public Parent getView() {
         return scrollPane;
     }
@@ -460,12 +218,8 @@ public class AuthenticationController implements AutoCloseable {
         if (closed || (pendingTask != null && pendingTask.isRunning())) {
             return;
         }
-        if (selectedEndpoint == null) {
-            message.setText("Vui lòng chọn hoặc tạo Server trước khi đăng nhập.");
-            return;
-        }
-        String serverHost = selectedEndpoint.host();
-        int serverPort = selectedEndpoint.port();
+        String serverHost = targetEndpoint.host();
+        int serverPort = targetEndpoint.port();
 
         String username = (register ? registerName : loginName).getText().trim();
         String password = (register ? registerPassword : loginPassword).getText();
@@ -493,7 +247,7 @@ public class AuthenticationController implements AutoCloseable {
             }
             setBusy(false);
             clearPasswords();
-            ConnectionPreferences.save(selectedEndpoint);
+            ConnectionPreferences.save(targetEndpoint);
             if (register) {
                 loginName.setText(username);
                 showForm.accept(false);
@@ -519,7 +273,6 @@ public class AuthenticationController implements AutoCloseable {
 
     private void setBusy(boolean busy) {
         formHost.setDisable(busy);
-        serverPanel.setDisable(busy);
     }
 
     private void clearPasswords() {

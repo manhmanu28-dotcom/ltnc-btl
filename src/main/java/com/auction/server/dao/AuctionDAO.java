@@ -30,13 +30,19 @@ public class AuctionDAO {
     ) {
     }
 
-    /** Tạo mới một phiên đấu giá xuống DB. */
+    /** Tạo mới một phiên đấu giá xuống DB (tương thích SQLite, PostgreSQL, MySQL). */
     public boolean createAuction(String auctionId, String itemId, String sellerId,
                                  double minIncrement, double startingPrice,
                                  String status, String startTime, String endTime) {
-        String sql = "INSERT OR IGNORE INTO auctions (id, item_id, seller_id, min_increment, current_price, status, start_time, end_time) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         DBConnection db = DBConnection.getInstance();
+        String sql = switch (db.getDialect()) {
+            case POSTGRESQL -> "INSERT INTO auctions (id, item_id, seller_id, min_increment, current_price, status, start_time, end_time) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
+            case MYSQL -> "INSERT IGNORE INTO auctions (id, item_id, seller_id, min_increment, current_price, status, start_time, end_time) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            case SQLITE -> "INSERT OR IGNORE INTO auctions (id, item_id, seller_id, min_increment, current_price, status, start_time, end_time) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        };
         synchronized (db) {
             try {
                 Connection conn = db.getConnection();
@@ -122,18 +128,21 @@ public class AuctionDAO {
         String sql = "SELECT id, item_id, seller_id, min_increment, current_price, "
                 + "current_winner_id, current_winner_username, status, start_time, end_time "
                 + "FROM auctions WHERE id = ?";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, auctionId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return Optional.of(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, auctionId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        if (rs.next()) {
+                            return Optional.of(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[AuctionDAO] Lỗi khi tìm phiên theo ID: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[AuctionDAO] Lỗi khi tìm phiên theo ID: " + e.getMessage());
         }
         return Optional.empty();
     }
@@ -144,16 +153,19 @@ public class AuctionDAO {
         String sql = "SELECT id, item_id, seller_id, min_increment, current_price, "
                 + "current_winner_id, current_winner_username, status, start_time, end_time "
                 + "FROM auctions ORDER BY created_at DESC";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql);
-                 ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    result.add(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql);
+                     ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        result.add(mapRow(rs));
+                    }
                 }
+            } catch (SQLException e) {
+                System.err.println("[AuctionDAO] Lỗi khi lấy danh sách phiên: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[AuctionDAO] Lỗi khi lấy danh sách phiên: " + e.getMessage());
         }
         return result;
     }
@@ -164,18 +176,21 @@ public class AuctionDAO {
         String sql = "SELECT id, item_id, seller_id, min_increment, current_price, "
                 + "current_winner_id, current_winner_username, status, start_time, end_time "
                 + "FROM auctions WHERE status = ? ORDER BY created_at DESC";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, status);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        result.add(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, status);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            result.add(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[AuctionDAO] Lỗi khi lọc phiên theo trạng thái: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[AuctionDAO] Lỗi khi lọc phiên theo trạng thái: " + e.getMessage());
         }
         return result;
     }
@@ -183,15 +198,18 @@ public class AuctionDAO {
     /** Xóa phiên đấu giá theo ID. */
     public boolean deleteById(String auctionId) {
         String sql = "DELETE FROM auctions WHERE id = ?";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, auctionId);
-                return pstmt.executeUpdate() > 0;
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, auctionId);
+                    return pstmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                System.err.println("[AuctionDAO] Lỗi khi xóa phiên: " + e.getMessage());
+                return false;
             }
-        } catch (SQLException e) {
-            System.err.println("[AuctionDAO] Lỗi khi xóa phiên: " + e.getMessage());
-            return false;
         }
     }
 

@@ -1,4 +1,4 @@
-﻿*.class
+*.class
 *.log
 *.ctxt
 .mtj.tmp/
@@ -15,10 +15,11 @@ out/
 build/
 target/
 
-# Local SQLite account data
+# Local SQLite account data & Cloud DB secret credentials
 *.db
 *.db-wal
 *.db-shm
+db.properties
 
 # IDE configs
 .idea/

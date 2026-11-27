@@ -27,12 +27,17 @@ $fxJars = @(Get-ChildItem -LiteralPath (Join-Path $repository 'org\openjfx') -Re
 $sqliteJar = Join-Path $repository 'org\xerial\sqlite-jdbc\3.45.1.0\sqlite-jdbc-3.45.1.0.jar'
 $slf4jJar = Join-Path $repository 'org\slf4j\slf4j-api\1.7.36\slf4j-api-1.7.36.jar'
 $gsonJar = Join-Path $repository 'com\google\code\gson\gson\2.10.1\gson-2.10.1.jar'
+$optionalDbJars = @(
+    Get-ChildItem -LiteralPath (Join-Path $repository 'org\postgresql\postgresql') -Recurse -Filter 'postgresql-*.jar' -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath (Join-Path $repository 'com\mysql\mysql-connector-j') -Recurse -Filter 'mysql-connector-j-*.jar' -ErrorAction SilentlyContinue
+) | Where-Object { $_.Name -notlike '*-sources.jar' -and $_.Name -notlike '*-javadoc.jar' }
 if ($fxJars.Count -lt 4 -or !(Test-Path -LiteralPath $sqliteJar) -or !(Test-Path -LiteralPath $slf4jJar) -or !(Test-Path -LiteralPath $gsonJar)) {
     throw "Thieu thu vien JavaFX $javafxVersion hoac dependency trong Maven cache. Hay reload Maven project trong IDE de tai dependencies, sau do chay lai script."
 }
 
 $fxPath = $fxJars.FullName -join ';'
-$dependencyPath = "$sqliteJar;$slf4jJar;$gsonJar"
+$dependencyParts = @($sqliteJar, $slf4jJar, $gsonJar) + @($optionalDbJars | ForEach-Object { $_.FullName })
+$dependencyPath = $dependencyParts -join ';'
 $classPath = "target/classes;$dependencyPath"
 $sources = (Get-ChildItem -LiteralPath 'src/main/java' -Recurse -Filter '*.java').FullName
 $javaHomeCompiler = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME 'bin\javac.exe' } else { $null }

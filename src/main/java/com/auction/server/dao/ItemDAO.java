@@ -21,14 +21,20 @@ import java.util.Optional;
  */
 public class ItemDAO {
 
-    /** Lưu một mặt hàng mới xuống bảng `items`. */
+    /** Lưu một mặt hàng mới xuống bảng `items` (tương thích SQLite, PostgreSQL, MySQL). */
     public boolean saveItem(Item item, String sellerId) {
         if (item == null || sellerId == null || sellerId.trim().isEmpty()) {
             return false;
         }
-        String sql = "INSERT OR IGNORE INTO items (id, seller_id, title, description, starting_price, category, extra_attributes) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?)";
         DBConnection db = DBConnection.getInstance();
+        String sql = switch (db.getDialect()) {
+            case POSTGRESQL -> "INSERT INTO items (id, seller_id, title, description, starting_price, category, extra_attributes) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
+            case MYSQL -> "INSERT IGNORE INTO items (id, seller_id, title, description, starting_price, category, extra_attributes) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+            case SQLITE -> "INSERT OR IGNORE INTO items (id, seller_id, title, description, starting_price, category, extra_attributes) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+        };
         synchronized (db) {
             try {
                 Connection conn = db.getConnection();
@@ -52,18 +58,21 @@ public class ItemDAO {
     /** Tìm mặt hàng theo ID. */
     public Optional<Item> findById(String itemId) {
         String sql = "SELECT id, title, description, starting_price, category FROM items WHERE id = ?";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, itemId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return Optional.of(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, itemId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        if (rs.next()) {
+                            return Optional.of(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[ItemDAO] Lỗi khi tìm mặt hàng theo ID: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[ItemDAO] Lỗi khi tìm mặt hàng theo ID: " + e.getMessage());
         }
         return Optional.empty();
     }
@@ -73,18 +82,21 @@ public class ItemDAO {
         List<Item> result = new ArrayList<>();
         String sql = "SELECT id, title, description, starting_price, category FROM items "
                 + "WHERE seller_id = ? ORDER BY created_at DESC";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, sellerId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        result.add(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, sellerId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            result.add(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[ItemDAO] Lỗi khi lấy danh sách mặt hàng theo Seller: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[ItemDAO] Lỗi khi lấy danh sách mặt hàng theo Seller: " + e.getMessage());
         }
         return result;
     }
@@ -93,16 +105,19 @@ public class ItemDAO {
     public List<Item> findAll() {
         List<Item> result = new ArrayList<>();
         String sql = "SELECT id, title, description, starting_price, category FROM items ORDER BY created_at DESC";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql);
-                 ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    result.add(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql);
+                     ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        result.add(mapRow(rs));
+                    }
                 }
+            } catch (SQLException e) {
+                System.err.println("[ItemDAO] Lỗi khi lấy toàn bộ mặt hàng: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[ItemDAO] Lỗi khi lấy toàn bộ mặt hàng: " + e.getMessage());
         }
         return result;
     }
@@ -110,15 +125,18 @@ public class ItemDAO {
     /** Xóa mặt hàng theo ID. */
     public boolean deleteById(String itemId) {
         String sql = "DELETE FROM items WHERE id = ?";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, itemId);
-                return pstmt.executeUpdate() > 0;
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, itemId);
+                    return pstmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                System.err.println("[ItemDAO] Lỗi khi xóa mặt hàng: " + e.getMessage());
+                return false;
             }
-        } catch (SQLException e) {
-            System.err.println("[ItemDAO] Lỗi khi xóa mặt hàng: " + e.getMessage());
-            return false;
         }
     }
 
