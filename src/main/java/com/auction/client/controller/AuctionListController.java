@@ -76,7 +76,8 @@ public class AuctionListController implements AutoCloseable {
     private final TextField hostField = new TextField("127.0.0.1");
     private final TextField portField = new TextField("8888");
     private TitledPane connectionSettings;
-    private final Label connectionLabel = new Label("Nhập địa chỉ server rồi bấm Tải danh sách.");
+    private final Label connectionLabel = new Label("");
+    private final Label subtitleLabel = AuctionTheme.label("Khám phá những món đồ có câu chuyện. Bắt đầu phiên đấu giá của bạn hôm nay.", "muted");
     private final AuctionListService auctionService = new AuctionListService();
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "Auction-List-Loader");
@@ -109,8 +110,8 @@ public class AuctionListController implements AutoCloseable {
         portField.setText(String.valueOf(session.port()));
         hostField.setEditable(false);
         portField.setEditable(false);
-        if (connectionSettings != null) {
-            connectionSettings.setText("Cài đặt kết nối · " + session.host() + ":" + session.port());
+        if (session.isSellerAccount()) {
+            subtitleLabel.setText("Quản lý sản phẩm đăng bán và theo dõi diễn biến các phiên đấu giá.");
         }
         registerRealtimeUpdates();
         loadAuctions();
@@ -147,8 +148,7 @@ public class AuctionListController implements AutoCloseable {
         Label title = AuctionTheme.label("Tìm thấy điều đặc biệt.", "market-title");
         title.setMinWidth(0);
         title.setWrapText(true);
-        Label subtitle = AuctionTheme.label("Khám phá những món đồ có câu chuyện. Bắt đầu phiên đấu giá của bạn hôm nay.", "muted");
-        subtitle.setWrapText(true);
+        subtitleLabel.setWrapText(true);
 
         connectionLabel.getStyleClass().add("muted");
         connectionLabel.setWrapText(true);
@@ -194,10 +194,7 @@ public class AuctionListController implements AutoCloseable {
         searchField.textProperty().addListener((observable, before, value) -> filterAuctions());
         statusFilter.valueProperty().addListener((observable, before, value) -> filterAuctions());
         HBox filters = new HBox(12, searchField, statusFilter);
-        connectionSettings = new TitledPane("Cài đặt kết nối", connectionBar);
-        connectionSettings.setExpanded(false);
-        connectionSettings.getStyleClass().add("connection-options");
-        VBox header = new VBox(14, AuctionTheme.label("KHÁM PHÁ / PHIÊN ĐẤU GIÁ", "eyebrow"), heading, subtitle, statistics, filters, connectionSettings, connectionLabel);
+        VBox header = new VBox(14, AuctionTheme.label("KHÁM PHÁ / PHIÊN ĐẤU GIÁ", "eyebrow"), heading, subtitleLabel, statistics, filters, connectionLabel);
 
         configureTable();
         productGrid.setHgap(20);
@@ -266,7 +263,7 @@ public class AuctionListController implements AutoCloseable {
             Label title = AuctionTheme.label(auction.itemTitle(), "product-title");
             title.setWrapText(true);
             title.setMinHeight(48);
-            Button inspect = new Button("Xem phiên  →");
+            Button inspect = new Button((session != null && session.isSellerAccount()) ? "Theo dõi phiên  →" : "Xem phiên  →");
             inspect.getStyleClass().add("secondary-button");
             inspect.setMaxWidth(Double.MAX_VALUE);
             inspect.setOnAction(event -> {
@@ -395,7 +392,7 @@ public class AuctionListController implements AutoCloseable {
         setLoading(true);
         auctionTable.setPlaceholder(new Label("Đang tải danh sách…"));
         if (auctions.isEmpty()) emptyMessage.setText("Đang tải các phiên đấu giá…");
-        connectionLabel.setText("Đang tải từ " + host + ":" + port + "…");
+        connectionLabel.setText("Đang tải danh sách phiên đấu giá…");
 
         loadTask = new Task<>() {
             @Override
@@ -418,8 +415,7 @@ public class AuctionListController implements AutoCloseable {
             }
             updateSummaryCounters();
             auctionTable.sort();
-            connectionLabel.setText("Đã tải " + loadTask.getValue().size()
-                    + " phiên từ " + host + ":" + port + ".");
+            connectionLabel.setText("Đã cập nhật " + loadTask.getValue().size() + " phiên đấu giá.");
             setLoading(false);
             updateEmptyState();
             restoreMarketplaceScroll(scrollPosition);
@@ -672,7 +668,7 @@ public class AuctionListController implements AutoCloseable {
         GridPane.setHgrow(titleField, Priority.ALWAYS);
         GridPane.setHgrow(wearField, Priority.ALWAYS);
 
-        Label source = AuctionTheme.label("Danh mục mẫu gồm " + SkinCatalog.all().size()
+        Label source = AuctionTheme.label("Danh mục gồm " + SkinCatalog.all().size()
                 + " skin · Ảnh tham khảo: CSGOSKINS.GG", "form-hint");
         source.setWrapText(true);
         VBox form = new VBox(16, picker, source, grid);

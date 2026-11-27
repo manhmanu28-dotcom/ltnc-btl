@@ -47,6 +47,7 @@ public final class AuctionRoomController implements AutoCloseable {
     private final TextField amount = new TextField();
     private final Button submit = new Button("Đặt giá ngay");
     private final HBox increments = new HBox(8);
+    private final VBox bidControls = new VBox(12);
     private final VBox history = new VBox(8);
     private final StackPane artwork = new StackPane();
     private final NumberAxis bidAxis = new NumberAxis(0, 5, 1);
@@ -190,9 +191,10 @@ public final class AuctionRoomController implements AutoCloseable {
         rules.setWrapText(true);
         leader.setWrapText(true);
         feedback.setWrapText(true);
+        bidControls.getChildren().setAll(amount, increments, submit);
         VBox bid = new VBox(12, label("THỜI GIAN CÒN LẠI", "eyebrow"), countdown,
                 new Separator(), label("GIÁ CAO NHẤT HIỆN TẠI", "eyebrow"), price,
-                leader, rules, amount, increments, submit, feedback);
+                leader, rules, bidControls, feedback);
         bid.getStyleClass().add("demo-card");
         ScrollPane historyScroll = new ScrollPane(history);
         historyScroll.setFitToWidth(true);
@@ -230,7 +232,11 @@ public final class AuctionRoomController implements AutoCloseable {
         if ("FINISHED".equals(value.status()) || "PAID".equals(value.status())) {
             feedback.setText(value.winner().isBlank() ? "Phiên kết thúc, chưa có người thắng."
                     : "Người thắng: " + value.winner() + " · " + money.format(value.highest()));
-        } else if ("CANCELED".equals(value.status())) feedback.setText("Phiên đấu giá đã bị hủy.");
+        } else if ("CANCELED".equals(value.status())) {
+            feedback.setText("Phiên đấu giá đã bị hủy.");
+        } else if (isSellerView()) {
+            feedback.setText(sellerNoticeText());
+        }
         renderHistory(value);
         if (!value.title().equals(imageTitle)) {
             imageTitle = value.title();
@@ -274,7 +280,7 @@ public final class AuctionRoomController implements AutoCloseable {
     }
 
     private void placeBid() {
-        if (submit.isDisabled() || snapshot == null) return;
+        if (isSellerView() || submit.isDisabled() || snapshot == null) return;
         double value;
         try {
             String text = amount.getText().strip();
@@ -323,8 +329,31 @@ public final class AuctionRoomController implements AutoCloseable {
         updateControls();
     }
 
+    private boolean isOwnAuction() {
+        return session != null && snapshot != null
+                && !session.userId().isBlank()
+                && !snapshot.sellerId().isBlank()
+                && session.userId().equals(snapshot.sellerId());
+    }
+
+    private boolean isSellerView() {
+        return (session != null && session.isSellerAccount()) || isOwnAuction();
+    }
+
+    private String sellerNoticeText() {
+        return isOwnAuction()
+                ? "Bạn là người bán của phiên đấu giá này nên chỉ có thể theo dõi diễn biến giá."
+                : "Tài khoản Người bán (Seller) chỉ có thể theo dõi phiên, không thể tham gia đặt giá.";
+    }
+
     private void updateControls() {
-        boolean disabled = !ready || busy || !session.client().isConnected() || snapshot == null
+        boolean hideBidding = isSellerView();
+        bidControls.setVisible(!hideBidding);
+        bidControls.setManaged(!hideBidding);
+        if (hideBidding && (snapshot == null || "RUNNING".equals(snapshot.status()) || "OPEN".equals(snapshot.status()))) {
+            feedback.setText(sellerNoticeText());
+        }
+        boolean disabled = hideBidding || !ready || busy || !session.client().isConnected() || snapshot == null
                 || !"RUNNING".equals(snapshot.status()) || remainingSeconds() == 0;
         submit.setDisable(disabled);
         amount.setDisable(disabled);

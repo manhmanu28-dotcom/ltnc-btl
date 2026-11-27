@@ -64,6 +64,7 @@ public class ClientHandler implements Runnable, Closeable {
 
     private BufferedReader reader;
     private PrintWriter writer;
+    private User authenticatedUser;
     private Bidder authenticatedBidder;
 
     public ClientHandler(Socket socket,
@@ -180,8 +181,10 @@ public class ClientHandler implements Runnable, Closeable {
     // =========================================================================
 
     private SocketResponse handleLogin(SocketRequest request) {
+        this.authenticatedUser = null;
         this.authenticatedBidder = null;
         User user = new AuthenticationService().login(request.getPayloadString("username"), passwordOf(request));
+        this.authenticatedUser = user;
         if (user instanceof Bidder bidder) {
             this.authenticatedBidder = activeBidders.computeIfAbsent(bidder.getId(), id -> bidder);
         }
@@ -206,6 +209,7 @@ public class ClientHandler implements Runnable, Closeable {
     }
 
     private SocketResponse handleLogout(SocketRequest request) {
+        this.authenticatedUser = null;
         this.authenticatedBidder = null;
         return SocketResponse.ok(request, "Đã đăng xuất khỏi phiên làm việc.");
     }
@@ -302,8 +306,8 @@ public class ClientHandler implements Runnable, Closeable {
     }
 
     private SocketResponse handleCreateAuction(SocketRequest request) {
-        String sellerId = (this.authenticatedBidder != null)
-                ? this.authenticatedBidder.getId()
+        String sellerId = (this.authenticatedUser != null)
+                ? this.authenticatedUser.getId()
                 : request.getUserId();
         if (sellerId == null || sellerId.trim().isEmpty()) {
             sellerId = request.getPayloadString("sellerId");

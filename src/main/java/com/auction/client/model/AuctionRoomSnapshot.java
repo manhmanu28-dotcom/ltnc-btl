@@ -6,10 +6,19 @@ import java.util.List;
 import java.util.Map;
 
 /** Complete server snapshot, including history, for the live room. */
-public record AuctionRoomSnapshot(String auctionId, String title, String description,
+public record AuctionRoomSnapshot(String auctionId, String sellerId, String title, String description,
         String status, double startingPrice, double highest, double minimumNextBid,
         double increment, String winner, LocalDateTime endTime, LocalDateTime serverTime,
         long receivedNanos, List<Bid> bids) {
+
+    public AuctionRoomSnapshot(String auctionId, String title, String description,
+            String status, double startingPrice, double highest, double minimumNextBid,
+            double increment, String winner, LocalDateTime endTime, LocalDateTime serverTime,
+            long receivedNanos, List<Bid> bids) {
+        this(auctionId, "", title, description, status, startingPrice, highest, minimumNextBid,
+                increment, winner, endTime, serverTime, receivedNanos, bids);
+    }
+
     public record Bid(String id, String bidder, double amount, LocalDateTime time) { }
 
     /** Keep fractional seconds until display rounding, even when JavaFX pulses arrive late. */
@@ -30,12 +39,12 @@ public record AuctionRoomSnapshot(String auctionId, String title, String descrip
             return new Bid(text(bid, "transactionId"), text(bid, "bidderUsername"),
                     number(bid, "amount"), LocalDateTime.parse(text(bid, "bidTime")));
         }).toList() : List.of();
-        return new AuctionRoomSnapshot(text(auction, "auctionId"), text(item, "title"),
-                text(item, "description"), text(auction, "status"), number(item, "startingPrice"),
-                number(auction, "currentHighestBid"), number(auction, "minimumNextBid"),
-                number(auction, "minIncrement"), text(auction, "currentWinnerUsername"),
-                LocalDateTime.parse(text(auction, "endTime")), response.getTimestamp(),
-                System.nanoTime(), bids);
+        return new AuctionRoomSnapshot(text(auction, "auctionId"), text(auction, "sellerId"),
+                text(item, "title"), text(item, "description"), text(auction, "status"),
+                number(item, "startingPrice"), number(auction, "currentHighestBid"),
+                number(auction, "minimumNextBid"), number(auction, "minIncrement"),
+                text(auction, "currentWinnerUsername"), LocalDateTime.parse(text(auction, "endTime")),
+                response.getTimestamp(), System.nanoTime(), bids);
     }
 
     private static String text(Map<?, ?> map, String key) {
