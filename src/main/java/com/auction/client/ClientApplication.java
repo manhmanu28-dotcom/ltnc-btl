@@ -104,7 +104,7 @@ public class ClientApplication extends Application {
         ServerEndpoint endpoint = initialEndpoint != null
                 ? initialEndpoint
                 : ConnectionPreferences.loadLastEndpoint();
-        authentication = new AuthenticationController(this::showAuctions, this::showPreview, endpoint);
+        authentication = new AuthenticationController(this::showAuctions, null, endpoint);
         if (stage.getScene() == null) {
             stage.setScene(new Scene(authentication.getView(), 1280, 860));
         } else {

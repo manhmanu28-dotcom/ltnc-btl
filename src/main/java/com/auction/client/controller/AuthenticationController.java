@@ -113,13 +113,6 @@ public class AuthenticationController implements AutoCloseable {
         registrationPrompt.setAlignment(Pos.CENTER);
         VBox.setMargin(registrationPrompt, new Insets(8, 0, 0, 0));
         loginForm.getChildren().add(registrationPrompt);
-        if (onDemo != null) {
-            Button demoButton = new Button("Khám phá giao diện mẫu →");
-            demoButton.getStyleClass().add("secondary-button");
-            demoButton.setMaxWidth(Double.MAX_VALUE);
-            demoButton.setOnAction(event -> onDemo.run());
-            loginForm.getChildren().add(demoButton);
-        }
 
         Hyperlink returnToLogin = new Hyperlink("Đăng nhập");
         returnToLogin.setId("auth-return-login-link");
@@ -153,11 +146,8 @@ public class AuthenticationController implements AutoCloseable {
             }
         });
 
-        Label serverCaption = label("Máy chủ BIDION · " + targetEndpoint.toAddress(), "form-hint");
-        serverCaption.setWrapText(true);
-
         VBox card = new VBox(16, label("TÀI KHOẢN BIDION", "eyebrow"), title, introduction,
-                formHost, message, serverCaption);
+                formHost, message);
         card.getStyleClass().add("auth-card");
         card.setMinWidth(360);
         card.setPrefWidth(420);
@@ -254,8 +244,13 @@ public class AuthenticationController implements AutoCloseable {
                 message.setText("Đăng ký thành công! Nhập mật khẩu để đăng nhập.");
                 loginPassword.requestFocus();
             } else {
+                var data = task.getValue().getData();
+                String userId = data.get("userId") != null ? String.valueOf(data.get("userId")) : "";
+                String role = data.get("role") != null ? String.valueOf(data.get("role")) : "BIDDER";
                 onLogin.accept(new AuthenticatedSession(
-                        String.valueOf(task.getValue().getData().get("username")),
+                        userId,
+                        String.valueOf(data.get("username")),
+                        role,
                         serverHost, serverPort, service.getClient()));
             }
             pendingTask = null;
