@@ -2,6 +2,8 @@ package com.auction.server;
 
 import com.auction.server.database.DBConnection;
 import com.auction.server.network.AuctionServer;
+import com.auction.server.service.AuctionManager;
+import com.auction.server.service.AuctionPersistenceService;
 import com.auction.server.network.GlobalServerRegistry;
 import com.auction.server.network.LanDiscoveryService;
 import com.auction.server.network.NetworkAddressUtil;
@@ -32,8 +34,8 @@ public class ServerApplication {
 
     public static void main(String[] args) throws Exception {
         ServerConfig config = ServerConfig.parse(args);
-        DBConnection.getInstance();
-        System.out.println("Tài khoản được lưu tại: " + Path.of("auction.db").toAbsolutePath());
+        DBConnection db = DBConnection.getInstance();
+        System.out.println("Tài khoản & dữ liệu được lưu bền vững tại: " + db.getDatabaseDisplayPath());
 
         String serverId = "SRV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String serverName = (config.serverName() == null || config.serverName().isBlank())
@@ -41,6 +43,11 @@ public class ServerApplication {
                 : config.serverName().trim();
 
         try (AuctionServer server = new AuctionServer(config.bindAddress(), config.port())) {
+            int restoredAuctions = AuctionPersistenceService.getInstance()
+                    .initializeAndLoad(AuctionManager.getInstance(), server.getActiveBidders());
+            if (restoredAuctions > 0) {
+                System.out.println("Đã khôi phục " + restoredAuctions + " phiên đấu giá từ cơ sở dữ liệu.");
+            }
             LanDiscoveryService.Responder discoveryResponder = null;
             PublicTunnelService publicTunnel = null;
             GlobalServerRegistry registry = new GlobalServerRegistry();
@@ -166,7 +173,7 @@ public class ServerApplication {
             System.out.println(" 3) Khác Wi-Fi / Internet     : " + publicEndpoint.toAddress());
             System.out.println("    -> Ô Server: " + publicEndpoint.host() + "  |  Ô Cổng: " + publicEndpoint.port());
         } else {
-            System.out.println(" 3) Khác Wi-Fi / Internet     : Chưa bật. Chạy .\\run.cmd Server -Public để mở địa chỉ công khai.");
+            System.out.println(" 3) Khác Wi-Fi / Internet     : Chưa bật. Chạy .\\run.ps1 Server -Public để mở địa chỉ công khai.");
         }
         System.out.println(" 4) Danh bạ 'Tham gia Server' : " + (registryPublished ? "ĐÃ ĐĂNG CÔNG KHAI (mọi người sẽ thấy ngay)" : "Chế độ cục bộ (LAN)"));
         System.out.println("-------------------------------------------------------------------------");

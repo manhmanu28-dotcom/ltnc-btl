@@ -26,23 +26,26 @@ public class ItemDAO {
         if (item == null || sellerId == null || sellerId.trim().isEmpty()) {
             return false;
         }
-        String sql = "INSERT INTO items (id, seller_id, title, description, starting_price, category, extra_attributes) "
+        String sql = "INSERT OR IGNORE INTO items (id, seller_id, title, description, starting_price, category, extra_attributes) "
                 + "VALUES (?, ?, ?, ?, ?, ?, ?)";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, item.getId());
-                pstmt.setString(2, sellerId.trim());
-                pstmt.setString(3, item.getTitle());
-                pstmt.setString(4, item.getDescription());
-                pstmt.setDouble(5, item.getStartingPrice());
-                pstmt.setString(6, resolveCategory(item));
-                pstmt.setString(7, item.getSpecificDetails());
-                return pstmt.executeUpdate() > 0;
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, item.getId());
+                    pstmt.setString(2, sellerId.trim());
+                    pstmt.setString(3, item.getTitle());
+                    pstmt.setString(4, item.getDescription());
+                    pstmt.setDouble(5, item.getStartingPrice());
+                    pstmt.setString(6, resolveCategory(item));
+                    pstmt.setString(7, item.getSpecificDetails());
+                    return pstmt.executeUpdate() > 0;
+                }
+            } catch (SQLException e) {
+                System.err.println("[ItemDAO] Lỗi khi lưu mặt hàng: " + e.getMessage());
+                return false;
             }
-        } catch (SQLException e) {
-            System.err.println("[ItemDAO] Lỗi khi lưu mặt hàng: " + e.getMessage());
-            return false;
         }
     }
 

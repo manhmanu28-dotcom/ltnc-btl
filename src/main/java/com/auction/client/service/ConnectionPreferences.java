@@ -120,10 +120,23 @@ public final class ConnectionPreferences {
         try {
             String host = SETTINGS.get(KEY_HOST, DEFAULT_ENDPOINT.host());
             int port = SETTINGS.getInt(KEY_PORT, DEFAULT_ENDPOINT.port());
+            if (isEphemeralTunnelHost(host)) {
+                return DEFAULT_ENDPOINT;
+            }
             return new ServerEndpoint(host, port);
         } catch (IllegalArgumentException | SecurityException ignored) {
             return DEFAULT_ENDPOINT;
         }
+    }
+
+    private static boolean isEphemeralTunnelHost(String host) {
+        if (host == null) {
+            return false;
+        }
+        String lower = host.trim().toLowerCase();
+        return lower.endsWith(".pinggy.link")
+                || lower.endsWith(".pinggy.io")
+                || lower.contains(".ngrok");
     }
 
     public static void save(ServerEndpoint endpoint) {

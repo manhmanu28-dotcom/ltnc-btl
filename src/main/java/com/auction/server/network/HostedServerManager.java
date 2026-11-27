@@ -1,6 +1,8 @@
 package com.auction.server.network;
 
 import com.auction.server.database.DBConnection;
+import com.auction.server.service.AuctionManager;
+import com.auction.server.service.AuctionPersistenceService;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -84,6 +86,8 @@ public final class HostedServerManager {
         String generatedId = "SRV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
         AuctionServer server = new AuctionServer(AuctionServer.DEFAULT_BIND_ADDRESS, portToUse);
+        AuctionPersistenceService.getInstance()
+                .initializeAndLoad(AuctionManager.getInstance(), server.getActiveBidders());
         server.start();
         int actualPort = server.getLocalPort();
 
