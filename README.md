@@ -1,4 +1,4 @@
-# [Tên sản phẩm] — Nền Tảng Đấu Giá Trực Tuyến Thời Gian Thực
+# BIDION — Nền Tảng Đấu Giá Trực Tuyến Thời Gian Thực
 
 > **Bài tập lớn môn Lập trình Nâng cao (LTNC)**  
 > Hệ thống đấu giá trực tuyến đa người dùng theo kiến trúc **Client–Server (JavaFX 17 + TCP Socket / JSON + SQLite)**, tích hợp cơ chế đồng bộ luồng `ReentrantLock`, tạm giữ số dư an toàn (Escrow Hold), đấu giá tự động `PriorityQueue`, chống đặt giá phút chót (Anti-sniping) và đẩy sự kiện thời gian thực theo Observer Pattern.
