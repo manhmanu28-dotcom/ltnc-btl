@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntSupplier;
 
@@ -39,7 +40,13 @@ public final class LanDiscoveryService {
             int port,
             String serverName,
             int auctionCount,
-            int connectedClients) {
+            int connectedClients,
+            String serverId) {
+
+        public DiscoveredServer(String host, int port, String serverName, int auctionCount, int connectedClients) {
+            this(host, port, serverName, auctionCount, connectedClients,
+                    "LAN-" + (serverName == null ? "SERVER" : serverName.trim().toUpperCase(Locale.ROOT)) + "-" + port);
+        }
 
         public ServerEndpoint toEndpoint() {
             return new ServerEndpoint(host, port);
@@ -62,15 +69,29 @@ public final class LanDiscoveryService {
     }
 
     public static Responder startResponder(AuctionServer server, int discoveryPort) throws IOException {
+        return startResponder(server, discoveryPort, NetworkAddressUtil.resolveLocalHostName(), null);
+    }
+
+    public static Responder startResponder(AuctionServer server,
+                                           int discoveryPort,
+                                           String serverName,
+                                           String serverId) throws IOException {
         if (server == null) {
             throw new IllegalArgumentException("AuctionServer không được null!");
         }
+        String resolvedName = (serverName == null || serverName.isBlank())
+                ? NetworkAddressUtil.resolveLocalHostName()
+                : serverName.trim();
+        String resolvedId = (serverId == null || serverId.isBlank())
+                ? "SRV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase()
+                : serverId.trim();
         return new Responder(
                 discoveryPort,
                 server::getLocalPort,
                 server::getAuctionCount,
                 server::getConnectedClientCount,
-                NetworkAddressUtil.resolveLocalHostName()
+                resolvedName,
+                resolvedId
         );
     }
 
@@ -161,12 +182,15 @@ public final class LanDiscoveryService {
                 < NetworkAddressUtil.ipReachabilityPriority(existingHost);
     }
 
-    static String encodeOffer(int tcpPort, int auctionCount, int connectedClients, String serverName) {
+    static String encodeOffer(int tcpPort, int auctionCount, int connectedClients, String serverName, String serverId) {
         String safeName = (serverName == null || serverName.trim().isEmpty())
                 ? "Auction-Server"
                 : serverName.trim().replace("|", "-").replace("\n", " ").replace("\r", " ");
+        String safeId = (serverId == null || serverId.trim().isEmpty())
+                ? "LAN-" + safeName.toUpperCase(Locale.ROOT) + "-" + tcpPort
+                : serverId.trim().replace("|", "-").replace("\n", " ").replace("\r", " ");
         return OFFER_PREFIX + tcpPort + "|" + Math.max(0, auctionCount) + "|"
-                + Math.max(0, connectedClients) + "|" + safeName;
+                + Math.max(0, connectedClients) + "|" + safeName + "|" + safeId;
     }
 
     static Optional<DiscoveredServer> parseOffer(String host, String payload) {
@@ -174,7 +198,7 @@ public final class LanDiscoveryService {
             return Optional.empty();
         }
         String body = payload.substring(OFFER_PREFIX.length());
-        String[] parts = body.split("\\|", 4);
+        String[] parts = body.split("\\|", 5);
         if (parts.length < 4) {
             return Optional.empty();
         }
@@ -183,6 +207,9 @@ public final class LanDiscoveryService {
             int auctionCount = Integer.parseInt(parts[1].trim());
             int connectedClients = Integer.parseInt(parts[2].trim());
             String name = parts[3].trim();
+            String id = (parts.length >= 5 && !parts[4].trim().isEmpty())
+                    ? parts[4].trim()
+                    : "LAN-" + (name.isEmpty() ? "SERVER" : name.toUpperCase(Locale.ROOT)) + "-" + tcpPort;
             if (tcpPort < 1 || tcpPort > 65535) {
                 return Optional.empty();
             }
@@ -191,7 +218,8 @@ public final class LanDiscoveryService {
                     tcpPort,
                     name.isEmpty() ? "Auction-Server" : name,
                     Math.max(0, auctionCount),
-                    Math.max(0, connectedClients)
+                    Math.max(0, connectedClients),
+                    id
             ));
         } catch (NumberFormatException error) {
             return Optional.empty();
@@ -207,6 +235,7 @@ public final class LanDiscoveryService {
         private final IntSupplier auctionCountSupplier;
         private final IntSupplier clientCountSupplier;
         private final String serverName;
+        private final String serverId;
         private final AtomicBoolean running = new AtomicBoolean(true);
         private final Thread thread;
 
@@ -214,7 +243,8 @@ public final class LanDiscoveryService {
                   IntSupplier tcpPortSupplier,
                   IntSupplier auctionCountSupplier,
                   IntSupplier clientCountSupplier,
-                  String serverName) throws IOException {
+                  String serverName,
+                  String serverId) throws IOException {
             this.socket = new DatagramSocket(null);
             this.socket.setReuseAddress(true);
             this.socket.bind(new InetSocketAddress(discoveryPort));
@@ -222,6 +252,7 @@ public final class LanDiscoveryService {
             this.auctionCountSupplier = auctionCountSupplier;
             this.clientCountSupplier = clientCountSupplier;
             this.serverName = serverName;
+            this.serverId = serverId;
 
             this.thread = new Thread(this::listenLoop, "Auction-LAN-Discovery");
             this.thread.setDaemon(true);
@@ -250,7 +281,8 @@ public final class LanDiscoveryService {
                             tcpPort,
                             auctionCountSupplier.getAsInt(),
                             clientCountSupplier.getAsInt(),
-                            serverName);
+                            serverName,
+                            serverId);
                     byte[] replyBytes = offer.getBytes(StandardCharsets.UTF_8);
                     DatagramPacket reply = new DatagramPacket(
                             replyBytes,

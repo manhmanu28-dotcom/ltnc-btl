@@ -7,6 +7,7 @@ import com.auction.client.model.AuthenticatedSession;
 import com.auction.client.service.ConnectionPreferences;
 import com.auction.client.ui.AuctionTheme;
 import com.auction.client.ui.StartupIntro;
+import com.auction.server.network.HostedServerManager;
 import com.auction.server.network.ServerEndpoint;
 import javafx.application.Application;
 import javafx.animation.Interpolator;
@@ -184,7 +185,15 @@ public class ClientApplication extends Application {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         Label account = AuctionTheme.label(session.username(), "account-chip");
         HBox navigation = new HBox(16, AuctionTheme.brand(),
-                AuctionTheme.label("Sàn đấu giá", "nav-caption"), spacer, AuctionTheme.themeToggle(), account, logout);
+                AuctionTheme.label("Sàn đấu giá", "nav-caption"), spacer);
+        if (HostedServerManager.getInstance().isRunning()) {
+            var hostedEntry = HostedServerManager.getInstance().getHostedDirectoryEntry();
+            String badgeText = hostedEntry != null && hostedEntry.hasPublicEndpoint()
+                    ? "HOST · " + hostedEntry.publicHost() + ":" + hostedEntry.publicPort()
+                    : "HOST · " + session.host() + ":" + session.port();
+            navigation.getChildren().add(AuctionTheme.label(badgeText, "feature-pill"));
+        }
+        navigation.getChildren().addAll(AuctionTheme.themeToggle(), account, logout);
         navigation.setAlignment(Pos.CENTER_LEFT);
         navigation.getStyleClass().add("navbar");
         HBox accountBar = new HBox(navigation);
@@ -210,6 +219,7 @@ public class ClientApplication extends Application {
         if (authentication != null) {
             authentication.close();
         }
+        HostedServerManager.getInstance().stopServer();
     }
 
     public static void main(String[] args) {
