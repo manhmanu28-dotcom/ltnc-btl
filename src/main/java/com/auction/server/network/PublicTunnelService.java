@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -23,13 +25,15 @@ import java.util.regex.Pattern;
  * để người dùng ở KHÁC MẠNG Wi-Fi / 4G có thể kết nối trực tiếp vào AuctionServer
  * mà không cần cấu hình mở cổng router (Port Forwarding) hay nhập thẻ thanh toán.
  *
- * Mặc định sử dụng OpenSSH tích hợp sẵn trên Windows 10/11, macOS, Linux kết nối tới Pinggy TCP.
+ * Tự động tạo khóa SSH Ed25519 không mật khẩu và chạy OpenSSH ở chế độ không tương tác
+ * (BatchMode=yes, -T) với 127.0.0.1 để không bao giờ bị treo hỏi mật khẩu trên Windows.
  */
 public class PublicTunnelService implements Closeable {
 
     private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile("\\u001B\\[[;?\\d]*[ -/]*[@-~]");
     private static final Pattern TCP_ENDPOINT_PATTERN = Pattern.compile(
             "tcp://([a-zA-Z0-9.-]+):(\\d{1,5})", Pattern.CASE_INSENSITIVE);
+    private static final List<String> PINGGY_TARGETS = List.of("tcp@free.pinggy.io", "tcp@a.pinggy.io");
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Process tunnelProcess;
@@ -38,16 +42,25 @@ public class PublicTunnelService implements Closeable {
 
     /**
      * Khởi chạy đường hầm công khai trỏ về cổng TCP nội bộ {@code localPort}.
-     *
-     * @param localPort     Cổng TCP mà AuctionServer đang lắng nghe (vd: 8888)
-     * @param timeoutMillis Thời gian chờ tối đa để nhận địa chỉ công khai từ dịch vụ tunnel
-     * @return Địa chỉ công khai {@link ServerEndpoint} (host + port) để gửi cho các Client khác mạng
      */
     public synchronized ServerEndpoint startPinggyTunnel(int localPort, long timeoutMillis) throws IOException {
         if (localPort < 1 || localPort > 65535) {
             throw new IllegalArgumentException("Cổng localPort không hợp lệ: " + localPort);
         }
-        return startWithCommand(buildPinggyCommand(localPort), timeoutMillis);
+        Path keyFile = ensureTunnelSshKey();
+        IOException lastError = null;
+        long perTargetTimeout = Math.max(6_000L, timeoutMillis / PINGGY_TARGETS.size());
+
+        for (String target : PINGGY_TARGETS) {
+            try {
+                return startWithCommand(buildPinggyCommand(localPort, keyFile, target), perTargetTimeout);
+            } catch (IOException error) {
+                lastError = error;
+                close();
+            }
+        }
+        throw lastError != null ? lastError
+                : new IOException("Không thể mở Public TCP Tunnel (Pinggy SSH).");
     }
 
     /**
@@ -64,7 +77,6 @@ public class PublicTunnelService implements Closeable {
         this.tunnelProcess = process;
         this.running.set(true);
 
-        // Gửi 1 ký tự xuống dòng phòng trường hợp dịch vụ tunnel yêu cầu bỏ qua mật khẩu trống
         try {
             OutputStream stdin = process.getOutputStream();
             stdin.write('\n');
@@ -128,25 +140,65 @@ public class PublicTunnelService implements Closeable {
             if (cause instanceof IOException io) {
                 throw io;
             }
-            throw new IOException("Không thể khởi tạo Public Tunnel: " + (cause != null ? cause.getMessage() : execution.getMessage()), cause);
+            throw new IOException("Không thể khởi tạo Public Tunnel: "
+                    + (cause != null ? cause.getMessage() : execution.getMessage()), cause);
         }
     }
 
-    static List<String> buildPinggyCommand(int localPort) {
+    private static Path ensureTunnelSshKey() {
+        try {
+            Path keyDir = Path.of(System.getProperty("user.home", "."), ".bidion");
+            Path keyFile = keyDir.resolve("tunnel_ed25519");
+            if (Files.isRegularFile(keyFile)) {
+                return keyFile;
+            }
+            Files.createDirectories(keyDir);
+            Process keygen = new ProcessBuilder(
+                    "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", keyFile.toAbsolutePath().toString())
+                    .redirectErrorStream(true)
+                    .start();
+            keygen.waitFor(8, TimeUnit.SECONDS);
+            if (Files.isRegularFile(keyFile)) {
+                return keyFile;
+            }
+        } catch (Exception ignored) {
+            // Nếu máy chưa có ssh-keygen vẫn thử chạy ssh mặc định
+        }
+        return null;
+    }
+
+    static List<String> buildPinggyCommand(int localPort, Path keyFile, String targetHost) {
         boolean isWindows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
         String nullDevice = isWindows ? "NUL" : "/dev/null";
-        return List.of(
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=" + nullDevice,
-                "-o", "ExitOnForwardFailure=yes",
-                "-o", "ServerAliveInterval=30",
-                "-o", "ServerAliveCountMax=3",
-                "-o", "ConnectTimeout=10",
-                "-p", "443",
-                "-R0:localhost:" + localPort,
-                "tcp@a.pinggy.io"
-        );
+        List<String> command = new ArrayList<>();
+        command.add("ssh");
+        command.add("-T");
+        command.add("-o");
+        command.add("StrictHostKeyChecking=no");
+        command.add("-o");
+        command.add("UserKnownHostsFile=" + nullDevice);
+        command.add("-o");
+        command.add("ExitOnForwardFailure=yes");
+        command.add("-o");
+        command.add("ServerAliveInterval=30");
+        command.add("-o");
+        command.add("ServerAliveCountMax=3");
+        command.add("-o");
+        command.add("ConnectTimeout=10");
+        if (keyFile != null && Files.isRegularFile(keyFile)) {
+            command.add("-o");
+            command.add("BatchMode=yes");
+            command.add("-i");
+            command.add(keyFile.toAbsolutePath().toString());
+            command.add("-o");
+            command.add("IdentitiesOnly=yes");
+        }
+        command.add("-p");
+        command.add("443");
+        command.add("-R");
+        command.add("0:127.0.0.1:" + localPort);
+        command.add(targetHost);
+        return command;
     }
 
     /**

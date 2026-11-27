@@ -89,6 +89,30 @@ public class AuctionSocketClient implements Closeable {
         }
     }
 
+    /**
+     * Tự động thử kết nối lần lượt các địa chỉ khả dụng của một Server (LAN ưu tiên -> dự phòng Internet hoặc ngược lại)
+     * để người dùng cùng Wi-Fi hay khác Wi-Fi đều vào được mượt mà.
+     */
+    public static ServerProbeResult probeBestEndpoint(ServerDirectoryEntry entry, int timeoutMillis) throws IOException {
+        if (entry == null) {
+            throw new IllegalArgumentException("Chưa chọn máy chủ!");
+        }
+        List<ServerEndpoint> candidates = entry.candidateEndpoints();
+        if (candidates.isEmpty()) {
+            throw new IOException("Máy chủ không có địa chỉ kết nối hợp lệ.");
+        }
+        IOException lastError = null;
+        for (ServerEndpoint candidate : candidates) {
+            try {
+                return probe(candidate, timeoutMillis);
+            } catch (IOException error) {
+                lastError = error;
+            }
+        }
+        throw lastError != null ? lastError
+                : new IOException("Không thể kết nối tới máy chủ " + entry.serverName());
+    }
+
     private static int extractInt(Object value) {
         if (value instanceof Number number) {
             return Math.max(0, number.intValue());
@@ -177,7 +201,7 @@ public class AuctionSocketClient implements Closeable {
     }
 
     public SocketResponse sendRequest(SocketRequest request) {
-        return sendRequest(request, 5000L);
+        return sendRequest(request, 10_000L);
     }
 
     /**
