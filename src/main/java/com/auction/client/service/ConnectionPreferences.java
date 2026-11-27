@@ -13,12 +13,12 @@ import java.util.Properties;
 import java.util.prefs.Preferences;
 
 /**
- * ConnectionPreferences: Lưu và nạp địa chỉ máy chủ dùng chung cho JavaFX Client.
+ * ConnectionPreferences: Nạp địa chỉ máy chủ dùng chung cho toàn bộ Client.
  *
  * Thứ tự ưu tiên khi khởi động:
- * 1. Tham số dòng lệnh --server=host:port (vd: .\run.cmd Client -Server 192.168.1.15:8888)
+ * 1. Tham số dòng lệnh --server=host:port (vd: .\run.cmd Client -Server host:port)
  * 2. Biến hệ thống -Dauction.server=host:port hoặc biến môi trường AUCTION_SERVER
- * 3. Tệp cấu hình chung auction-server.properties (nếu có trong thư mục chạy)
+ * 3. Tệp cấu hình chung auction-server.properties (nếu cấu hình địa chỉ Cloud dùng chung)
  * 4. Địa chỉ máy chủ đã kết nối thành công gần nhất (lưu trong Preferences)
  * 5. Mặc định 127.0.0.1:8888
  */
@@ -56,11 +56,35 @@ public final class ConnectionPreferences {
         if (fromEnv != null) {
             return fromEnv;
         }
-        ServerEndpoint fromFile = readFromPropertiesFile(Path.of("auction-server.properties"));
-        if (fromFile != null) {
+        ServerEndpoint fromFile = readSharedServerConfig();
+        if (fromFile != null && !fromFile.isLoopback()) {
+            // Khi nhóm đã cấu hình địa chỉ Cloud Server cố định trong auction-server.properties,
+            // luôn ưu tiên vào thẳng đúng 1 Server dùng chung duy nhất này.
             return fromFile;
         }
-        return loadLastEndpoint();
+        ServerEndpoint lastUsed = loadLastEndpoint();
+        if (lastUsed != null && !lastUsed.isLoopback()) {
+            return lastUsed;
+        }
+        return fromFile != null ? fromFile : DEFAULT_ENDPOINT;
+    }
+
+    private static ServerEndpoint readSharedServerConfig() {
+        for (Path candidate : List.of(
+                Path.of("auction-server.properties"),
+                Path.of("ltnc-btl", "auction-server.properties"))) {
+            ServerEndpoint endpoint = readFromPropertiesFile(candidate);
+            if (endpoint != null) {
+                return endpoint;
+            }
+        }
+        try (InputStream in = ConnectionPreferences.class.getResourceAsStream("/com/auction/client/auction-server.properties")) {
+            if (in != null) {
+                return readFromStream(in);
+            }
+        } catch (IOException ignored) {
+        }
+        return null;
     }
 
     static ServerEndpoint parseFromArgs(List<String> rawArgs) {
@@ -91,12 +115,16 @@ public final class ConnectionPreferences {
         if (file == null || !Files.isRegularFile(file)) {
             return null;
         }
-        Properties props = new Properties();
         try (InputStream in = Files.newInputStream(file)) {
-            props.load(in);
+            return readFromStream(in);
         } catch (IOException ignored) {
             return null;
         }
+    }
+
+    private static ServerEndpoint readFromStream(InputStream in) throws IOException {
+        Properties props = new Properties();
+        props.load(in);
         String serverValue = props.getProperty("server");
         if (serverValue != null && !serverValue.trim().isEmpty()) {
             return parseOptional(serverValue);
@@ -120,23 +148,10 @@ public final class ConnectionPreferences {
         try {
             String host = SETTINGS.get(KEY_HOST, DEFAULT_ENDPOINT.host());
             int port = SETTINGS.getInt(KEY_PORT, DEFAULT_ENDPOINT.port());
-            if (isEphemeralTunnelHost(host)) {
-                return DEFAULT_ENDPOINT;
-            }
             return new ServerEndpoint(host, port);
         } catch (IllegalArgumentException | SecurityException ignored) {
             return DEFAULT_ENDPOINT;
         }
-    }
-
-    private static boolean isEphemeralTunnelHost(String host) {
-        if (host == null) {
-            return false;
-        }
-        String lower = host.trim().toLowerCase();
-        return lower.endsWith(".pinggy.link")
-                || lower.endsWith(".pinggy.io")
-                || lower.contains(".ngrok");
     }
 
     public static void save(ServerEndpoint endpoint) {

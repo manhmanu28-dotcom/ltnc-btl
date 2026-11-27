@@ -2,21 +2,20 @@ package com.auction.server;
 
 import com.auction.server.database.DBConnection;
 import com.auction.server.network.AuctionServer;
-import com.auction.server.service.AuctionManager;
-import com.auction.server.service.AuctionPersistenceService;
 import com.auction.server.network.GlobalServerRegistry;
 import com.auction.server.network.LanDiscoveryService;
 import com.auction.server.network.NetworkAddressUtil;
 import com.auction.server.network.PublicTunnelService;
 import com.auction.server.network.ServerDirectoryEntry;
 import com.auction.server.network.ServerEndpoint;
+import com.auction.server.service.AuctionManager;
+import com.auction.server.service.AuctionPersistenceService;
 
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -25,14 +24,16 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Chạy máy chủ đấu giá dùng chung (hỗ trợ cả cùng Wi-Fi/LAN và khác Wi-Fi qua Public Tunnel + Danh bạ toàn cầu).
+ * Chạy máy chủ đấu giá tập trung (hỗ trợ deploy 24/7 trên Cloud Docker/Railway/VPS
+ * hoặc chạy cục bộ trên LAN/Public Tunnel).
  *
  * Tham số hỗ trợ:
- * - [port] hoặc --port <port> : Cổng TCP lắng nghe (mặc định 8888)
- * - --name <ten-server>       : Tên hiển thị trong danh sách "Tham gia Server"
+ * - [port] hoặc --port <port> : Cổng TCP lắng nghe (ưu tiên CLI -> AUCTION_PORT -> PORT -> 8888)
+ * - --name <ten-server>       : Tên hiển thị của máy chủ
  * - --bind <ip>               : Địa chỉ bind (mặc định 0.0.0.0 - nhận mọi kết nối mạng)
- * - --public                  : Tự động mở Public TCP Tunnel (Pinggy SSH) cho người khác Wi-Fi/4G
- * - --no-discovery            : Tắt dịch vụ tự tìm máy chủ trên cùng Wi-Fi (UDP 8889)
+ * - --public                  : Tự động mở Public TCP Tunnel (Pinggy SSH) khi chạy trên máy cá nhân
+ * - --no-discovery            : Tắt UDP LAN Discovery (dùng khi deploy lên Cloud/Docker)
+ * - --no-registry             : Tắt đăng ký danh bạ động (dùng khi chạy Server cố định 24/7)
  */
 public class ServerApplication {
 
@@ -45,7 +46,7 @@ public class ServerApplication {
 
         String serverId = "SRV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String serverName = (config.serverName() == null || config.serverName().isBlank())
-                ? "Server của " + NetworkAddressUtil.resolveLocalHostName()
+                ? "BIDION Server (" + NetworkAddressUtil.resolveLocalHostName() + ")"
                 : config.serverName().trim();
 
         try (AuctionServer server = new AuctionServer(config.bindAddress(), config.port())) {
@@ -56,7 +57,7 @@ public class ServerApplication {
             }
             LanDiscoveryService.Responder discoveryResponder = null;
             PublicTunnelService publicTunnel = null;
-            GlobalServerRegistry registry = new GlobalServerRegistry();
+            GlobalServerRegistry registry = config.enableGlobalRegistry() ? new GlobalServerRegistry() : null;
             ScheduledExecutorService heartbeat = null;
             CountDownLatch keepAlive = new CountDownLatch(1);
 
@@ -84,7 +85,7 @@ public class ServerApplication {
                     publicEndpoint = publicTunnel.startPinggyTunnel(actualPort, 20_000L);
                 } catch (IOException error) {
                     System.out.println("[Cảnh báo] " + error.getMessage());
-                    System.out.println("Server vẫn đang chạy bình thường cho mạng LAN/Wi-Fi nội bộ.");
+                    System.out.println("Server vẫn đang chạy bình thường trên cổng TCP " + actualPort + ".");
                     publicTunnel.close();
                     publicTunnel = null;
                 }
@@ -94,26 +95,35 @@ public class ServerApplication {
             String primaryLanIp = lanAddresses.isEmpty() ? "127.0.0.1" : lanAddresses.get(0).hostAddress();
             final ServerEndpoint finalPublicEndpoint = publicEndpoint;
 
-            boolean registryPublished = registry.announceOnline(buildDirectoryEntry(
-                    serverId, serverName, primaryLanIp, actualPort, finalPublicEndpoint, server));
-            heartbeat = Executors.newSingleThreadScheduledExecutor(runnable -> {
-                Thread t = new Thread(runnable, "Auction-Server-Registry-Heartbeat");
-                t.setDaemon(true);
-                return t;
-            });
-            heartbeat.scheduleAtFixedRate(
-                    () -> registry.announceOnline(buildDirectoryEntry(
-                            serverId, serverName, primaryLanIp, actualPort, finalPublicEndpoint, server)),
-                    GlobalServerRegistry.DEFAULT_HEARTBEAT_INTERVAL_MS,
-                    GlobalServerRegistry.DEFAULT_HEARTBEAT_INTERVAL_MS,
-                    TimeUnit.MILLISECONDS);
+            boolean registryPublished = false;
+            if (registry != null) {
+                registryPublished = registry.announceOnline(buildDirectoryEntry(
+                        serverId, serverName, primaryLanIp, actualPort, finalPublicEndpoint, server));
+                heartbeat = Executors.newSingleThreadScheduledExecutor(runnable -> {
+                    Thread t = new Thread(runnable, "Auction-Server-Registry-Heartbeat");
+                    t.setDaemon(true);
+                    return t;
+                });
+                final GlobalServerRegistry finalRegistry = registry;
+                heartbeat.scheduleAtFixedRate(
+                        () -> finalRegistry.announceOnline(buildDirectoryEntry(
+                                serverId, serverName, primaryLanIp, actualPort, finalPublicEndpoint, server)),
+                        GlobalServerRegistry.DEFAULT_HEARTBEAT_INTERVAL_MS,
+                        GlobalServerRegistry.DEFAULT_HEARTBEAT_INTERVAL_MS,
+                        TimeUnit.MILLISECONDS);
+            }
 
             final LanDiscoveryService.Responder finalDiscovery = discoveryResponder;
             final PublicTunnelService finalTunnel = publicTunnel;
             final ScheduledExecutorService finalHeartbeat = heartbeat;
+            final GlobalServerRegistry finalRegistry = registry;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                finalHeartbeat.shutdownNow();
-                registry.announceOffline(serverId, serverName);
+                if (finalHeartbeat != null) {
+                    finalHeartbeat.shutdownNow();
+                }
+                if (finalRegistry != null) {
+                    finalRegistry.announceOffline(serverId, serverName);
+                }
                 if (finalTunnel != null) {
                     finalTunnel.close();
                 }
@@ -162,10 +172,8 @@ public class ServerApplication {
         System.out.println("=========================================================================");
         System.out.println(" 1) Cùng máy (Local)          : 127.0.0.1:" + port);
 
-        if (lanAddresses.isEmpty()) {
-            System.out.println(" 2) Cùng Wi-Fi / LAN          : Không tìm thấy địa chỉ IPv4 LAN khả dụng.");
-        } else {
-            System.out.println(" 2) Cùng Wi-Fi / LAN          :");
+        if (!lanAddresses.isEmpty()) {
+            System.out.println(" 2) Mạng LAN / Nội bộ         :");
             for (NetworkAddressUtil.InterfaceAddressInfo info : lanAddresses) {
                 String tag = info.virtualAdapter() ? "[VPN/Ảo]" : "[LAN/Wi-Fi]";
                 System.out.printf("      %-11s %s:%d  (%s)%n", tag, info.hostAddress(), port, info.interfaceName());
@@ -174,29 +182,31 @@ public class ServerApplication {
         if (discoveryEnabled) {
             System.out.println("    Tự động tìm kiếm LAN      : ĐANG BẬT (UDP " + LanDiscoveryService.DEFAULT_DISCOVERY_PORT + ")");
         }
-
         if (publicEndpoint != null) {
-            System.out.println(" 3) Khác Wi-Fi / Internet     : " + publicEndpoint.toAddress());
-            System.out.println("    -> Ô Server: " + publicEndpoint.host() + "  |  Ô Cổng: " + publicEndpoint.port());
-        } else {
-            System.out.println(" 3) Khác Wi-Fi / Internet     : Chưa bật. Chạy .\\run.ps1 Server -Public để mở địa chỉ công khai.");
+            System.out.println(" 3) Đường hầm công khai       : " + publicEndpoint.toAddress());
         }
-        System.out.println(" 4) Danh bạ 'Tham gia Server' : " + (registryPublished ? "ĐÃ ĐĂNG CÔNG KHAI (mọi người sẽ thấy ngay)" : "Chế độ cục bộ (LAN)"));
+        if (registryPublished) {
+            System.out.println(" 4) Danh bạ trực tuyến        : ĐÃ ĐĂNG CÔNG KHAI");
+        }
         System.out.println("-------------------------------------------------------------------------");
-        System.out.println(" Mẹo Windows Firewall (nếu máy cùng Wi-Fi không vào được), chạy PowerShell Admin:");
-        System.out.println("   New-NetFirewallRule -DisplayName \"Auction Server TCP " + port
-                + "\" -Direction Inbound -Protocol TCP -LocalPort " + port + " -Action Allow");
-        System.out.println(" Nhấn Ctrl+C để dừng Server.");
+        System.out.println(" Server đang lắng nghe kết nối TCP trên cổng " + port + ". Nhấn Ctrl+C để dừng.");
         System.out.println("=========================================================================");
     }
 
-    record ServerConfig(String bindAddress, int port, String serverName, boolean enablePublicTunnel, boolean enableLanDiscovery) {
+    record ServerConfig(String bindAddress,
+                        int port,
+                        String serverName,
+                        boolean enablePublicTunnel,
+                        boolean enableLanDiscovery,
+                        boolean enableGlobalRegistry) {
+
         static ServerConfig parse(String[] args) {
             String bind = AuctionServer.DEFAULT_BIND_ADDRESS;
-            int port = AuctionServer.DEFAULT_PORT;
+            int port = resolveDefaultPort();
             String name = "";
             boolean publicTunnel = false;
             boolean lanDiscovery = true;
+            boolean globalRegistry = true;
 
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
@@ -204,6 +214,8 @@ public class ServerApplication {
                     publicTunnel = true;
                 } else if ("--no-discovery".equalsIgnoreCase(arg)) {
                     lanDiscovery = false;
+                } else if ("--no-registry".equalsIgnoreCase(arg)) {
+                    globalRegistry = false;
                 } else if ("--port".equalsIgnoreCase(arg) && i + 1 < args.length) {
                     port = Integer.parseInt(args[++i]);
                 } else if (arg.startsWith("--port=")) {
@@ -220,7 +232,23 @@ public class ServerApplication {
                     port = Integer.parseInt(arg);
                 }
             }
-            return new ServerConfig(bind, port, name, publicTunnel, lanDiscovery);
+            return new ServerConfig(bind, port, name, publicTunnel, lanDiscovery, globalRegistry);
+        }
+
+        private static int resolveDefaultPort() {
+            for (String envName : new String[]{"AUCTION_PORT", "PORT"}) {
+                String raw = System.getenv(envName);
+                if (raw != null && !raw.isBlank()) {
+                    try {
+                        int parsed = Integer.parseInt(raw.trim());
+                        if (parsed >= 1 && parsed <= 65535) {
+                            return parsed;
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+            return AuctionServer.DEFAULT_PORT;
         }
     }
 }

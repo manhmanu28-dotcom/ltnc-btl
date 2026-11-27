@@ -22,14 +22,20 @@ public class BidDAO {
     private static final DateTimeFormatter SQLITE_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    /** Lưu một giao dịch đặt giá mới xuống DB. */
+    /** Lưu một giao dịch đặt giá mới xuống DB (tương thích SQLite, PostgreSQL, MySQL). */
     public boolean saveBid(BidTransaction bid) {
         if (bid == null) {
             return false;
         }
-        String sql = "INSERT OR IGNORE INTO bid_transactions (id, auction_id, bidder_id, bidder_username, bid_amount, bid_time) "
-                + "VALUES (?, ?, ?, ?, ?, ?)";
         DBConnection db = DBConnection.getInstance();
+        String sql = switch (db.getDialect()) {
+            case POSTGRESQL -> "INSERT INTO bid_transactions (id, auction_id, bidder_id, bidder_username, bid_amount, bid_time) "
+                    + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
+            case MYSQL -> "INSERT IGNORE INTO bid_transactions (id, auction_id, bidder_id, bidder_username, bid_amount, bid_time) "
+                    + "VALUES (?, ?, ?, ?, ?, ?)";
+            case SQLITE -> "INSERT OR IGNORE INTO bid_transactions (id, auction_id, bidder_id, bidder_username, bid_amount, bid_time) "
+                    + "VALUES (?, ?, ?, ?, ?, ?)";
+        };
         synchronized (db) {
             try {
                 Connection conn = db.getConnection();
@@ -78,18 +84,21 @@ public class BidDAO {
         List<BidTransaction> result = new ArrayList<>();
         String sql = "SELECT id, auction_id, bidder_id, bidder_username, bid_amount, bid_time "
                 + "FROM bid_transactions WHERE auction_id = ? ORDER BY bid_amount DESC, bid_time DESC";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, auctionId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        result.add(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, auctionId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            result.add(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[BidDAO] Lỗi khi lấy lịch sử đặt giá theo phiên: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[BidDAO] Lỗi khi lấy lịch sử đặt giá theo phiên: " + e.getMessage());
         }
         return result;
     }
@@ -99,18 +108,21 @@ public class BidDAO {
         List<BidTransaction> result = new ArrayList<>();
         String sql = "SELECT id, auction_id, bidder_id, bidder_username, bid_amount, bid_time "
                 + "FROM bid_transactions WHERE bidder_id = ? ORDER BY bid_time DESC";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, bidderId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        result.add(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, bidderId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        while (rs.next()) {
+                            result.add(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[BidDAO] Lỗi khi lấy lịch sử đặt giá theo Bidder: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[BidDAO] Lỗi khi lấy lịch sử đặt giá theo Bidder: " + e.getMessage());
         }
         return result;
     }
@@ -119,18 +131,21 @@ public class BidDAO {
     public Optional<BidTransaction> findHighestBid(String auctionId) {
         String sql = "SELECT id, auction_id, bidder_id, bidder_username, bid_amount, bid_time "
                 + "FROM bid_transactions WHERE auction_id = ? ORDER BY bid_amount DESC, bid_time ASC LIMIT 1";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, auctionId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return Optional.of(mapRow(rs));
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, auctionId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        if (rs.next()) {
+                            return Optional.of(mapRow(rs));
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[BidDAO] Lỗi khi tìm giá cao nhất: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[BidDAO] Lỗi khi tìm giá cao nhất: " + e.getMessage());
         }
         return Optional.empty();
     }
@@ -138,18 +153,21 @@ public class BidDAO {
     /** Đếm tổng số lượt đặt giá của một phiên. */
     public int countByAuctionId(String auctionId) {
         String sql = "SELECT COUNT(*) FROM bid_transactions WHERE auction_id = ?";
-        try {
-            Connection conn = DBConnection.getInstance().getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, auctionId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return rs.getInt(1);
+        DBConnection db = DBConnection.getInstance();
+        synchronized (db) {
+            try {
+                Connection conn = db.getConnection();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, auctionId);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        if (rs.next()) {
+                            return rs.getInt(1);
+                        }
                     }
                 }
+            } catch (SQLException e) {
+                System.err.println("[BidDAO] Lỗi khi đếm lượt đặt giá: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            System.err.println("[BidDAO] Lỗi khi đếm lượt đặt giá: " + e.getMessage());
         }
         return 0;
     }

@@ -1,0 +1,23 @@
+# ==============================================================================
+# CẤU HÌNH CLOUD DATABASE DÙNG CHUNG CHO NHÓM (BIDION AUCTION SYSTEM)
+# ==============================================================================
+# Hướng dẫn:
+# 1. Sao chép file này thành `db.properties` (file db.properties đã có trong .gitignore
+#    để KHÔNG bị đẩy mật khẩu lên GitHub).
+# 2. Bỏ dấu `#` ở 1 trong các mẫu dưới đây và dán chuỗi kết nối Cloud DB của nhóm vào.
+# 3. Ngoài ra có thể truyền qua biến môi trường: AUCTION_DB_URL, AUCTION_DB_USER, AUCTION_DB_PASSWORD.
+#    Nếu không cấu hình, hệ thống tự động dùng SQLite cục bộ (jdbc:sqlite:auction.db).
+# ==============================================================================
+
+# --- MẪU 1: Neon / Supabase (PostgreSQL - Khuyên dùng, hỗ trợ dán nguyên URL URI) ---
+# db.url=postgresql://user:password@ep-xxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+
+# Hoặc dạng JDBC chuẩn:
+# db.url=jdbc:postgresql://ep-xxx.ap-southeast-1.aws.neon.tech:5432/neondb?sslmode=require
+# db.user=neondb_owner
+# db.password=YOUR_PASSWORD
+
+# --- MẪU 2: TiDB Cloud / Aiven (MySQL) ---
+# db.url=jdbc:mysql://gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/test?sslMode=VERIFY_IDENTITY&useUnicode=true&characterEncoding=UTF-8
+# db.user=YOUR_TIDB_USER
+# db.password=YOUR_TIDB_PASSWORD

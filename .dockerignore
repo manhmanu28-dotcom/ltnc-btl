@@ -1,0 +1,12 @@
+.git
+.gitignore
+.idea
+.vscode
+target
+out
+build
+*.db
+*.db-wal
+*.db-shm
+*.log
+db.properties

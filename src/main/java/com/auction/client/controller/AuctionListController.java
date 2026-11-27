@@ -9,8 +9,6 @@ import com.auction.client.service.SkinCatalog;
 import com.auction.client.ui.SkinPicker;
 import com.auction.client.ui.SkinPromoBanner;
 import com.auction.client.ui.AuctionTheme;
-import com.auction.server.network.HostedServerManager;
-import com.auction.server.network.ServerDirectoryEntry;
 import com.auction.server.network.ServerEndpoint;
 import com.auction.server.network.protocol.ActionType;
 import com.auction.server.network.protocol.SocketResponse;
@@ -542,25 +540,11 @@ public class AuctionListController implements AutoCloseable {
 
     private void copyServerInvite() {
         try {
-            ServerDirectoryEntry hosted = HostedServerManager.getInstance().getHostedDirectoryEntry();
-            ServerEndpoint endpoint;
-            if (hosted != null && hosted.hasPublicEndpoint()) {
-                endpoint = hosted.publicEndpoint();
-            } else if (hosted != null && hosted.hasLanEndpoint()) {
-                endpoint = hosted.lanEndpoint();
-            } else {
-                endpoint = ServerEndpoint.fromInputs(hostField.getText(), portField.getText());
-            }
+            ServerEndpoint endpoint = ServerEndpoint.fromInputs(hostField.getText(), portField.getText());
             ClipboardContent content = new ClipboardContent();
             content.putString(endpoint.toAddress());
             Clipboard.getSystemClipboard().setContent(content);
-            if (endpoint.isLoopback()) {
-                connectionLabel.setText("Đã sao chép " + endpoint.toAddress()
-                        + " (địa chỉ nội bộ). Để máy khác cùng vào, hãy tạo Server với chế độ công khai.");
-            } else {
-                connectionLabel.setText("Đã sao chép địa chỉ mời: " + endpoint.toAddress()
-                        + " — bạn bè cũng có thể thấy ngay trong mục 'Tham gia Server'!");
-            }
+            connectionLabel.setText("Đã sao chép địa chỉ máy chủ: " + endpoint.toAddress());
         } catch (IllegalArgumentException error) {
             connectionLabel.setText(error.getMessage());
         }
