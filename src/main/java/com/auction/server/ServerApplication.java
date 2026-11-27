@@ -11,7 +11,11 @@ import com.auction.server.network.PublicTunnelService;
 import com.auction.server.network.ServerDirectoryEntry;
 import com.auction.server.network.ServerEndpoint;
 
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
@@ -33,6 +37,8 @@ import java.util.concurrent.TimeUnit;
 public class ServerApplication {
 
     public static void main(String[] args) throws Exception {
+        System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8));
+        System.setErr(new PrintStream(new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8));
         ServerConfig config = ServerConfig.parse(args);
         DBConnection db = DBConnection.getInstance();
         System.out.println("Tài khoản & dữ liệu được lưu bền vững tại: " + db.getDatabaseDisplayPath());

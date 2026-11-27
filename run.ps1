@@ -9,6 +9,16 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
+# Bat UTF-8 cho console Windows de hien thi dung tieng Viet co dau
+try {
+    & chcp 65001 | Out-Null
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [Console]::InputEncoding = $utf8NoBom
+    [Console]::OutputEncoding = $utf8NoBom
+    $OutputEncoding = $utf8NoBom
+} catch {
+}
+
 # Dung cac thu vien da co trong Maven cache, khong can lenh mvn trong PATH.
 $repository = Join-Path $env:USERPROFILE '.m2\repository'
 $pom = [xml](Get-Content -LiteralPath 'pom.xml' -Raw)
@@ -57,5 +67,5 @@ if ($Mode -eq 'Server') {
     $appArguments = @("--server=$($Server.Trim())")
 }
 
-& $javaRuntime --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass @appArguments
+& $javaRuntime '-Dfile.encoding=UTF-8' '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' '-Dsun.stdout.encoding=UTF-8' '-Dsun.stderr.encoding=UTF-8' --module-path $fxPath --add-modules javafx.controls,javafx.fxml -cp $classPath $mainClass @appArguments
 exit $LASTEXITCODE
