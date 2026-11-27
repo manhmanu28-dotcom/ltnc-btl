@@ -57,7 +57,10 @@ public final class AuctionTheme {
         toggle.accessibleTextProperty().bind(javafx.beans.binding.Bindings.when(DARK)
                 .then("Chuyển sang giao diện sáng").otherwise("Chuyển sang giao diện tối"));
         toggle.setTooltip(new Tooltip("Chuyển giao diện sáng / tối"));
-        toggle.setOnAction(event -> ThemeTransition.play(toggle, () -> DARK.set(!DARK.get())));
+        toggle.setOnAction(event -> {
+            boolean toDark = !DARK.get();
+            ThemeTransition.play(toggle, toDark, () -> DARK.set(toDark));
+        });
         return toggle;
     }
     private AuctionTheme() {
